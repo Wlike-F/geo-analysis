@@ -1,0 +1,8 @@
+﻿node_modules/
+target/
+dist/
+.idea/
+.vscode/
+*.jar
+*.class
+*.log

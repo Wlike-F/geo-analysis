@@ -1,0 +1,31 @@
+server:
+  port: 8081
+  servlet:
+    context-path: /api
+
+spring:
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 500MB
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/well_log_db?useUnicode=true&characterEncoding=UTF-8&serverTimezone=GMT%2B8&useSSL=false&rewriteBatchedStatements=true      
+    username: root
+    password:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      password:
+      database: 2
+
+# JWT 令牌
+jwt:
+  secret: YXNkZmFzZGZjenh2Y3p4dnF3ZXJxZXdycXdlcmRzYWZhc2RmYXNkZg==
+  expiration: 86400 # 24h
+
+ai:
+  api-key: sk-sp-81f92fee05d341b896727a65735592ee
+  api-url: https://api.chatanywhere.tech/v1/chat/completions 
+  model: glm-5 
