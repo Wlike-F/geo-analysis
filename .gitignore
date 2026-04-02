@@ -3,6 +3,26 @@ target/
 dist/
 .idea/
 .vscode/
+
+# Build artifacts
 *.jar
 *.class
 *.log
+target/
+dist/
+node_modules/
+
+# Data and logs
+data/*.txt
+logs/
+*.zip
+*.rar
+*.tar.gz
+
+# Frontend build and temp files
+.env.local
+.env.*.local
+*.suo
+*.user
+*.userosscache
+*.sln.docstates

@@ -1,1 +1,0 @@
-const fs = require('fs'); let api = fs.readFileSync('src/api/file.js', 'utf8'); api += \\\nexport function exportBatchZipStream(data) {\\n  return request({\\n    url: '/data/export-batch-zip',\\n    method: 'post',\\n    data,\\n    responseType: 'blob'\\n  })\\n}\\n\; fs.writeFileSync('src/api/file.js', api, 'utf8');
