@@ -38,7 +38,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import request from '@/utils/request'
+import { getInstructionList } from '@/api/instruction'
 import { Reading, PriceTag, Lock, Bell, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 
@@ -92,7 +92,7 @@ const fallbackData = [
 
 const fetchInstructions = async () => {
   try {
-    const data = await request.get('/instruction/list')
+    const data = await getInstructionList()
     if (data && Array.isArray(data) && data.length > 0) {
       instructionsList.value = data
     } else {

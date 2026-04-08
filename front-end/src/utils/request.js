@@ -4,7 +4,8 @@ import router from '@/router'
 
 // 创建 axios 实例
 const service = axios.create({
-  baseURL: 'http://localhost:8080/api', // 设定后端基础URL，根据实际情况修改
+  // 开发环境走本地代理('/api')，生产环境打包后直接请求公网IP的接口
+  baseURL: import.meta.env.DEV ? '/api' : 'http://47.76.162.193/api', 
   timeout: 300000, // 请求超时时间改为300秒(5分钟)，适配大文件或者批量文件上传
 })
 

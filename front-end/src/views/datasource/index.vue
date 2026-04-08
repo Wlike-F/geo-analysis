@@ -121,6 +121,7 @@
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
+import { deleteFile, clearFiles } from '@/api/file'
 
 // 列表查询相关
 const loading = ref(false)
@@ -233,7 +234,7 @@ const handleDelete = (row) => {
     type: 'warning'
   }).then(async () => {
     try {
-      await request.delete(`/file/${row.id}`)
+      await deleteFile(row.id)
       ElMessage.success('删除成功')
       getTableData()
     } catch (error) {
@@ -249,7 +250,7 @@ const handleClear = () => {
     type: 'error'
   }).then(async () => {
     try {
-      await request.delete('/file/clear')
+      await clearFiles()
       ElMessage.success('清空成功')
       getTableData()
     } catch (error) {

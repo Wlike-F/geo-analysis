@@ -155,7 +155,7 @@
 import { ref, onMounted, nextTick, shallowRef, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 import { Setting, MagicStick, Download, DataAnalysis, Plus, List, Delete } from '@element-plus/icons-vue'
-import request from '@/utils/request'
+import { getFileList, getEchartsData } from '@/api/file'
 import { ElMessage } from 'element-plus'
 
 // 状态管理
@@ -188,7 +188,7 @@ const rawChartData = shallowRef({})
 // 获文件列表
 const fetchFileList = async () => {
   try {
-    const data = await request.get('/file/list')
+    const data = await getFileList()
     if (data && Array.isArray(data)) {
       fileList.value = data
       if (fileList.value.length > 0) {
@@ -370,7 +370,7 @@ const handleDraw = async () => {
 
   loading.value = true
   try {
-    const data = await request.get(`/data/echarts/${selectedFile.value}`)
+    const data = await getEchartsData(selectedFile.value)
     if (data) {
       rawChartData.value = data
       

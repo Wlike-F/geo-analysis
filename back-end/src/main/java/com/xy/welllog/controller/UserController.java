@@ -173,7 +173,7 @@ public class UserController {
     /**
      * [管理员] 删除用户
      */
-    @DeleteMapping("/delete/{id}")
+    @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id) {
         sysUserService.removeById(id);
         return Result.success(null, "删除成功");

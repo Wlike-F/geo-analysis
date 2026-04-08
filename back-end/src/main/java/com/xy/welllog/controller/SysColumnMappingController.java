@@ -13,7 +13,7 @@ import java.util.Arrays;
 import java.util.List;
 
 @RestController
-@RequestMapping("/api/column-mapping")
+@RequestMapping("/column-mapping")
 public class SysColumnMappingController {
 
     @Autowired

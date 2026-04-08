@@ -78,3 +78,25 @@ export function exportBatchExcelZip(data) {
   })
 }
 export function exportBatchZipStream(data) { return request({ url: '/data/export-batch-zip', method: 'post', data, responseType: 'blob' }) }
+
+export function getEchartsData(fileId) {
+  return request({
+    url: `/data/echarts/${fileId}`,
+    method: 'get'
+  })
+}
+
+export function deleteFile(id) {
+  return request({
+    url: `/file/${id}`,
+    method: 'delete'
+  })
+}
+
+export function clearFiles() {
+  return request({
+    url: '/file/clear',
+    method: 'delete'
+  })
+}
+
