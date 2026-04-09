@@ -50,11 +50,7 @@
             {{ formatColumns(row.columnsJson) }}
           </template>
         </el-table-column>
-        <el-table-column prop="createTime" label="上传时间" width="180">
-          <template #default="{ row }">
-            {{ formatDate(row.createTime) }}
-          </template>
-        </el-table-column>
+        <el-table-column prop="createTime" label="上传时间" width="180"></el-table-column>
         <el-table-column label="状态" width="120" align="center">
           <template #default="{ row }">
             <el-tag v-if="row.status === 1" type="success">可用</el-tag>

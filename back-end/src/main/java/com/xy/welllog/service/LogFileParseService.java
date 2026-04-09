@@ -29,6 +29,47 @@ public class LogFileParseService {
     private final LogFileInfoService fileInfoService;
     private final JdbcTemplate jdbcTemplate;
 
+
+    private List<String> extractLinesFromFile(File file, String title, int limitLines) {
+        List<String> list = new ArrayList<>();
+        String lowerTitle = title.toLowerCase();
+        try {
+            if (lowerTitle.endsWith(".xls") || lowerTitle.endsWith(".xlsx") || lowerTitle.endsWith(".csv")) {
+                List<Map<Integer, String>> data = com.alibaba.excel.EasyExcel.read(file).headRowNumber(0).sheet().headRowNumber(0).doReadSync();
+                for (int i = 0; i < data.size(); i++) {
+                    if (limitLines > 0 && list.size() >= limitLines) break;
+                    Map<Integer, String> row = data.get(i);
+                    if (row != null) {
+                        StringBuilder sb = new StringBuilder();
+                        int maxCol = row.keySet().stream().max(Integer::compareTo).orElse(-1);
+                        for (int j = 0; j <= maxCol; j++) {
+                            String val = row.get(j);
+                            val = val == null ? "" : val.trim().replace("\uFEFF", "").replaceAll("\\s+", "_"); // replace spaces so logic doesn't break
+                            sb.append(val).append(" ");
+                        }
+                        if (!sb.toString().trim().isEmpty()) {
+                            list.add(sb.toString().trim());
+                        }
+                    }
+                }
+            } else {
+                try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(file), "GBK"))) {
+                    String line;
+                    while ((line = br.readLine()) != null) {
+                        if (!line.trim().isEmpty()) {
+                            list.add(line.trim().replace("\uFEFF", ""));
+                            if (limitLines > 0 && list.size() >= limitLines) break;
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.error("Failed reading lines for " + file.getName(), e);
+        }
+        return list;
+    }
+
+
     /**
      * 1. 预览逻辑：读取前100行找表头，提取建议映射和原始表头，并提取前50行预览数据。
      */
@@ -58,19 +99,7 @@ public class LogFileParseService {
             compiledRules.put(standardName, Pattern.compile(regexBuilder.toString(), Pattern.CASE_INSENSITIVE));
         }
 
-        List<String> probeLines = new ArrayList<>();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(file), "GBK"))) {
-            String line;
-            int lineCounter = 0;
-            while ((line = br.readLine()) != null && lineCounter < 100) {
-                if (!line.trim().isEmpty()) {
-                    probeLines.add(line.trim());
-                    lineCounter++;
-                }
-            }
-        } catch (Exception e) {
-            log.error("预览读取异常", e);
-        }
+        List<String> probeLines = extractLinesFromFile(file, title, 100);
 
         int bestScore = -1, headerIndex = -1;
         List<String> bestColumns = new ArrayList<>();
@@ -127,10 +156,11 @@ public class LogFileParseService {
 
         // 提取前50行数据
         List<Map<String, Object>> previewData = new ArrayList<>();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(file), "GBK"))) {
-            String line;
+        List<String> frontLines = extractLinesFromFile(file, title, 200);
+        try {
             boolean dataStarted = false;
-            while ((line = br.readLine()) != null && previewData.size() < 50) {
+            for (String line : frontLines) {
+                if (previewData.size() >= 50) break;
                 if (line.trim().isEmpty()) continue;
                 String[] parts = line.trim().split("\\s+");
                 if (!dataStarted) {
@@ -173,12 +203,12 @@ public class LogFileParseService {
 
         int totalRows = 0;
         long lineNum = 0;
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(new FileInputStream(file), "GBK"))) {
-            String dataLine;
+        List<String> allLines = extractLinesFromFile(file, title, 0); // Read all
+        try {
             boolean dataStarted = false;
             List<Map<String, Object>> batch = new ArrayList<>(2000);
 
-            while ((dataLine = br.readLine()) != null) {
+            for (String dataLine : allLines) {
                 lineNum++;
                 if (dataLine.trim().isEmpty()) continue;
                 String[] parts = dataLine.trim().split("\\s+");

@@ -34,7 +34,8 @@ public class SysOperationLogServiceImpl extends ServiceImpl<SysOperationLogMappe
         
         // 1. Get Top aggregated stats
         try {
-            dbStats = this.baseMapper.getSystemStats();
+            Long queryUserId = isAdmin ? null : currentUserId;
+            dbStats = this.baseMapper.getSystemStats(queryUserId);
             if (dbStats == null) {
                 systemStatus = "数据库异常";
             }

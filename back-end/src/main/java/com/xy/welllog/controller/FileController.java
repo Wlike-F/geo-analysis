@@ -145,9 +145,9 @@ public class FileController {
             return Result.failed("该路径不存在或不是一个目录");
         }
 
-        List<File> txtFiles = FileUtil.loopFiles(path, pathname -> pathname.getName().toLowerCase().endsWith(".txt"));
+        List<File> txtFiles = FileUtil.loopFiles(path, pathname -> pathname.getName().toLowerCase().matches(".*\\.(txt|csv|xls|xlsx)$"));
         if (txtFiles == null || txtFiles.isEmpty()) {
-            return Result.failed("指定目录下没有任何 .txt 格式的测井记录");
+            return Result.failed("指定目录下没有任何受支持格式(.txt/.csv/.xls/.xlsx)的测井记录");
         }
 
         int submittedCount = 0;
@@ -237,8 +237,9 @@ public class FileController {
             try (ZipOutputStream zos = new ZipOutputStream(response.getOutputStream())) {
                 for (WellLogFileDTO fileDTO : exportDataList) {
                     String excelFileName = fileDTO.getTitle();
-                    if (excelFileName.toLowerCase().endsWith(".txt")) {
-                        excelFileName = excelFileName.substring(0, excelFileName.length() - 4);
+                    int lastDotIndex = excelFileName.lastIndexOf(".");
+                    if (lastDotIndex > 0) {
+                        excelFileName = excelFileName.substring(0, lastDotIndex);
                     }
                     excelFileName += ".xlsx";
                     zos.putNextEntry(new ZipEntry(excelFileName));

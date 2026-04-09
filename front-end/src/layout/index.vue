@@ -46,7 +46,7 @@
           <template #title><span>使用说明</span></template>
         </el-menu-item>
 
-        <el-menu-item index="/dictionary" v-if="userStore.isAdmin">
+        <el-menu-item index="/dictionary">
           <el-icon><Key /></el-icon>
           <template #title><span>字典映射参数</span></template>
         </el-menu-item>

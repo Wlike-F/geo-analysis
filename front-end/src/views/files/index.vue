@@ -172,7 +172,7 @@
       <el-table-column prop="id" label="ID" width="80"></el-table-column>
       <el-table-column prop="fileName" label="文件名" show-overflow-tooltip></el-table-column>
       <el-table-column prop="totalRows" label="总行数" width="120"></el-table-column>
-      <el-table-column prop="createTime" label="上传时间" :formatter="formatDate" width="180"></el-table-column>
+      <el-table-column prop="createTime" label="上传时间" width="180"></el-table-column>
     </el-table>
     <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
       <el-pagination
@@ -206,17 +206,6 @@ const activeTabName = ref('')
 const tabs = ref([])
 const fileList = ref([])
 
-const formatDate = (row, column, cellValue) => {
-  if (!cellValue) return '';
-  const date = new Date(cellValue);
-  const pad = (n) => (n < 10 ? '0' + n : n);
-  return date.getFullYear() + '-' +
-    pad(date.getMonth() + 1) + '-' +
-    pad(date.getDate()) + ' ' +
-    pad(date.getHours()) + ':' +
-    pad(date.getMinutes()) + ':' +
-    pad(date.getSeconds());
-};
 
 const selectedFiles = ref([])
 

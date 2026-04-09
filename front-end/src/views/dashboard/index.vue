@@ -164,7 +164,7 @@
               <el-timeline-item 
                 v-for="(log, idx) in recentLogs" 
                 :key="idx"
-                :timestamp="formatTime(log.createTime)" 
+                :timestamp="log.createTime" 
                 placement="top" 
                 :color="getLogColor(log.module)"
                 :hollow="true"
