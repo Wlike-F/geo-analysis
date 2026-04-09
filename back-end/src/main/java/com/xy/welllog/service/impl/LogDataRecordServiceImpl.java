@@ -1,5 +1,4 @@
 package com.xy.welllog.service.impl;
-import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.xy.welllog.entity.LogDataRecord;
 import com.xy.welllog.entity.SysColumnMapping;

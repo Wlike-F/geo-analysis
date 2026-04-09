@@ -5,7 +5,6 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.xy.welllog.entity.SysOperationLog;
 import com.xy.welllog.mapper.SysOperationLogMapper;
 import com.xy.welllog.service.SysOperationLogService;
-import com.xy.welllog.utils.JwtUtils;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
