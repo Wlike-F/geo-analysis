@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="datasource-container">
     <el-card class="box-card" shadow="hover">
       <template #header>
@@ -55,17 +55,20 @@
             {{ formatDate(row.createTime) }}
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="100" align="center">
+        <el-table-column label="状态" width="120" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.status === 1 ? 'success' : 'danger'">
-              {{ row.status === 1 ? '可用' : '失效' }}
+            <el-tag v-if="row.status === 1" type="success">可用</el-tag>
+            <el-tag v-else-if="row.status === 0" type="primary" effect="light">
+              <el-icon class="is-loading"><Loading /></el-icon> 解析中
             </el-tag>
+            <el-tag v-else-if="row.status === -1" type="danger">解析失败</el-tag>
+            <el-tag v-else type="info">未知</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="200" fixed="right" align="center">
           <template #default="{ row }">
-            <el-button size="small" type="primary" link icon="View" @click="handlePreview(row)">预览</el-button>
-            <el-button size="small" type="danger" link icon="Delete" @click="handleDelete(row)">删除</el-button>
+            <el-button size="small" type="primary" link icon="View" @click="handlePreview(row)" :disabled="row.status !== 1">预览</el-button>
+            <el-button size="small" type="danger" link icon="Delete" @click="handleDelete(row)" :disabled="row.status === 0">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -93,8 +96,8 @@
       </el-form>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="scanDialogVisible = false">取消</el-button>      
-          <el-button type="primary" :loading="scanning" @click="confirmScan">   
+          <el-button @click="scanDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="scanning" @click="confirmScan">
             开始扫描
           </el-button>
         </span>
@@ -103,7 +106,7 @@
 
     <!-- 数据预览弹窗 -->
     <el-dialog v-model="previewDialogVisible" title="数据预览 (前100行)" width="80%" top="5vh">
-      <el-table :data="previewData" border stripe height="60vh" v-loading="previewLoading">
+      <el-table :data="previewTableData" border stripe height="60vh" v-loading="previewLoading">
         <el-table-column
           v-for="col in previewColumns"
           :key="col"
@@ -114,14 +117,43 @@
         />
       </el-table>
     </el-dialog>
+
+    <!-- P2 Sandbox UI: 数据预览与列映射沙盒 -->
+    <el-dialog v-model="sandboxVisible" title="数据预览与列映射沙盒 (Data Sandbox)" width="80%" top="5vh">
+      <el-alert title="系统已从前 100 行样本中推测了部分字段。若错位，请下拉调整。确认后，无法匹配的数据将被丢入隔离区。" type="warning" show-icon />
+      <div style="margin: 15px 0; font-weight: bold; font-size: 16px;">文件: {{ previewSummary.originalFileName }}</div>
+      <el-table :data="previewSummary.previewData" style="width: 100%" max-height="400" border stripe>
+         <el-table-column v-for="(header, index) in previewSummary.originalHeaders" :key="index" min-width="160">
+           <template #header>
+             <div style="margin-bottom:5px; color:#909399; font-size:12px;">原列: {{ header }}</div>
+             <!-- Two way bind suggestedMapping -->
+             <el-select v-model="previewSummary.suggestedMapping[index]" placeholder="映射到" size="small" style="width: 100%">
+                <el-option value="Ignore" label="[弃用] / 不入库" />
+                <!-- options from allMappingOptions -->
+                <el-option v-for="mapCol in allMappingOptions" :key="mapCol.standardKey" :label="`${mapCol.standardName} (${mapCol.chineseMeaning})`" :value="mapCol.standardName" />
+             </el-select>
+           </template>
+           <template #default="scope">
+              <!-- read from the original key returned by backend to display preview correctly -->
+              {{ scope.row[previewSummary.originalSuggestedMapping[index]] || scope.row[header] || scope.row['ExtraCol'+(index+1)] }}
+           </template>
+         </el-table-column>
+      </el-table>
+      <template #footer>
+         <el-button @click="sandboxVisible = false">取消</el-button>
+         <el-button type="primary" :loading="sandboxLoading" @click="confirmSandbox">确认映射并落库</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { deleteFile, clearFiles } from '@/api/file'
+import { getAllColumnMappings } from '@/api/columnMapping'
+import { Loading, FolderOpened, Upload, Delete, Search, View } from '@element-plus/icons-vue'
 
 // 列表查询相关
 const loading = ref(false)
@@ -132,6 +164,32 @@ const pageParams = reactive({
   size: 10,
   fileName: ''
 })
+
+let pollingTimer = null
+
+// 轮询机制
+const checkPolling = () => {
+  const isParsing = tableData.value.some(item => item.status === 0)
+  if (isParsing && !pollingTimer) {
+    pollingTimer = setInterval(() => {
+      fetchTableDataSilently()
+    }, 3000)
+  } else if (!isParsing && pollingTimer) {
+    clearInterval(pollingTimer)
+    pollingTimer = null
+  }
+}
+
+const fetchTableDataSilently = async () => {
+  try {
+    const res = await request.get('/file/page', { params: pageParams })
+    tableData.value = res.records || []
+    total.value = res.total || 0
+    checkPolling()
+  } catch (error) {
+    console.error('轮询查询失败', error)
+  }
+}
 
 const handleSearch = () => {
   pageParams.current = 1
@@ -149,15 +207,32 @@ const getTableData = async () => {
     const res = await request.get('/file/page', {
       params: pageParams
     })
-    // 假设已经剥离外层，返回的就是 page 对象
     tableData.value = res.records || []
     total.value = res.total || 0
+    checkPolling()
   } catch (error) {
     ElMessage.error(error.message || '获取列表失败')
   } finally {
     loading.value = false
   }
 }
+
+const allMappingOptions = ref([])
+const fetchMappingOptions = async () => {
+  try {
+    const res = await getAllColumnMappings()
+    allMappingOptions.value = res || []
+  } catch (error) {
+    console.error('获取映射选项失败', error)
+  }
+}
+
+onUnmounted(() => {
+  if (pollingTimer) {
+    clearInterval(pollingTimer)
+    pollingTimer = null
+  }
+})
 
 const handleSizeChange = (val) => {
   pageParams.size = val
@@ -185,22 +260,54 @@ const formatDate = (dateStr) => {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`
 }
 
-// 模拟上传
+// 沙盒相关
+const sandboxVisible = ref(false)
+const sandboxLoading = ref(false)
+const previewSummary = ref({
+  tempFilePath: '',
+  originalFileName: '',
+  originalHeaders: [],
+  suggestedMapping: [],
+  previewData: [],
+  originalSuggestedMapping: []
+})
+
+// 上传（预览模式）
 const customUpload = async (options) => {
   const formData = new FormData()
   formData.append('file', options.file)
   try {
     loading.value = true
-    await request.post('/file/upload', formData, {
+    const res = await request.post('/file/preview', formData, {
       headers: { 'Content-Type': 'multipart/form-data' }
     })
-    ElMessage.success('上传成功')
-    pageParams.current = 1
-    getTableData()
+    
+    // 备份原始建议映射用于数据渲染定位
+    res.originalSuggestedMapping = [...res.suggestedMapping]
+    previewSummary.value = res
+    sandboxVisible.value = true
   } catch (error) {
-    ElMessage.error(error.message || '上传失败')
+    ElMessage.error(error.message || '预览生成失败')
   } finally {
     loading.value = false
+  }
+}
+
+const confirmSandbox = async () => {
+  sandboxLoading.value = true
+  try {
+    await request.post('/file/confirm', {
+      tempFilePath: previewSummary.value.tempFilePath,
+      originalFileName: previewSummary.value.originalFileName,
+      confirmedMapping: previewSummary.value.suggestedMapping
+    })
+    ElMessage.success('映射确认成功，开始入库')
+    sandboxVisible.value = false
+    getTableData()
+  } catch (error) {
+    ElMessage.error(error.message || '确认失败')
+  } finally {
+    sandboxLoading.value = false
   }
 }
 
@@ -262,13 +369,13 @@ const handleClear = () => {
 // 预览相关
 const previewDialogVisible = ref(false)
 const previewLoading = ref(false)
-const previewData = ref([])
+const previewTableData = ref([])
 const previewColumns = ref([])
 
 const handlePreview = async (row) => {
   previewDialogVisible.value = true
   previewLoading.value = true
-  previewData.value = []
+  previewTableData.value = []
   previewColumns.value = []
   
   if (row.columnsJson) {
@@ -283,8 +390,7 @@ const handlePreview = async (row) => {
       current: 1,
       size: 100
     })
-    // 根据系统封装情况，可能是 res 或 res.records 或 res.data.records 等
-    previewData.value = res.records || res.data?.records || res || []
+    previewTableData.value = res.records || res.data?.records || res || []
   } catch (error) {
     ElMessage.error(error.message || '获取预览数据失败')
   } finally {
@@ -294,6 +400,7 @@ const handlePreview = async (row) => {
 
 onMounted(() => {
   getTableData()
+  fetchMappingOptions()
 })
 </script>
 
