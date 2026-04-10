@@ -96,7 +96,7 @@
                   <div class="item-title">登录日志</div>
                   <div class="item-desc">查看最近登录系统的记录和IP地址</div>
                 </div>
-                <el-button type="info" plain>查看详情</el-button>
+                <el-button type="info" plain @click="showLoginLogDialog">查看详情</el-button>
               </div>
             </div>
           </div>
@@ -125,8 +125,30 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 登录日志弹窗 -->
+    <el-dialog title="登录日志" v-model="logDialogVisible" width="600px" append-to-body>
+      <el-table :data="loginLogData" v-loading="logLoading" align="center" border>
+        <el-table-column type="index" label="序号" width="60" align="center"></el-table-column>
+        <el-table-column prop="description" label="活动详情" min-width="200"></el-table-column>
+        <el-table-column prop="createTime" label="发生时间" width="180" align="center"></el-table-column>
+      </el-table>
+      <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
+        <el-pagination
+          v-model:current-page="logPage.current"
+          v-model:page-size="logPage.size"
+          :total="logPage.total"
+          layout="total, prev, pager, next"
+          @current-change="fetchLoginLogs"
+        />
+      </div>
+      <template #footer>
+        <el-button @click="logDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
+
 
 <script setup>
 import { reactive, watch, ref } from 'vue'
@@ -134,6 +156,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/store/user'
 import { updateProfile, updatePwd, updateSettings } from '@/api/user'
+import { getLoginLogs } from '@/api/log'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -215,6 +238,30 @@ const goToProfile = () => {
 
 // ==== 修改密码逻辑 ====
 const pwdDialogVisible = ref(false)
+
+// 登录日志逻辑
+const logDialogVisible = ref(false)
+const logLoading = ref(false)
+const loginLogData = ref([])
+const logPage = ref({ current: 1, size: 10, total: 0 })
+
+const fetchLoginLogs = async () => {
+  logLoading.value = true
+  try {
+    const res = await getLoginLogs({ current: logPage.value.current, size: logPage.value.size })
+    if (res) {
+      loginLogData.value = res.records || []
+      logPage.value.total = res.total || 0
+    }
+  } finally {
+    logLoading.value = false
+  }
+}
+
+const showLoginLogDialog = () => {
+  logDialogVisible.value = true
+  fetchLoginLogs()
+}
 const pwdLoading = ref(false)
 const pwdFormRef = ref(null)
 

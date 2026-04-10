@@ -23,6 +23,7 @@ public class SysOperationLogServiceImpl extends ServiceImpl<SysOperationLogMappe
         log.setFileCount(fileCount != null ? fileCount : 0);
         log.setLineCount(lineCount != null ? lineCount : 0L);
         log.setUserId(userId != null ? userId : 1L);
+        this.save(log);
     }
 
     @Override
