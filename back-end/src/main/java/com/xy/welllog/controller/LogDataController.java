@@ -1,20 +1,27 @@
 package com.xy.welllog.controller;
 
+import cn.hutool.json.JSONUtil;
+import com.alibaba.excel.EasyExcel;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.alibaba.excel.EasyExcel;
 import com.xy.welllog.common.Result;
+import com.xy.welllog.dto.LogDataQueryDTO;
 import com.xy.welllog.entity.LogDataRecord;
 import com.xy.welllog.entity.LogFileInfo;
+import com.xy.welllog.entity.SysUser;
 import com.xy.welllog.service.LogDataRecordService;
 import com.xy.welllog.service.LogFileInfoService;
-import com.xy.welllog.dto.LogDataQueryDTO;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.*;
-import cn.hutool.json.JSONObject;
-import cn.hutool.json.JSONUtil;
+import com.xy.welllog.service.SysOperationLogService;
+import com.xy.welllog.service.SysUserService;
+import com.xy.welllog.utils.JwtUtils;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.util.StringUtils;
+import org.springframework.web.bind.annotation.*;
+
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
@@ -26,9 +33,34 @@ public class LogDataController {
 
     @Autowired
     private LogDataRecordService dataRecordService;
-    
+
     @Autowired
     private LogFileInfoService fileInfoService;
+
+    @Autowired
+    private SysOperationLogService operationLogService;
+
+    @Autowired
+    private SysUserService sysUserService;
+
+    @Autowired
+    private JwtUtils jwtUtils;
+
+    private Long getUserId(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        if (StringUtils.hasText(header) && header.startsWith("Bearer ")) {
+            String username = jwtUtils.getUsernameFromToken(header.substring(7));
+            if (username != null) {
+                LambdaQueryWrapper<SysUser> wrapper = new LambdaQueryWrapper<>();
+                wrapper.eq(SysUser::getUsername, username);
+                SysUser user = sysUserService.getOne(wrapper);
+                if (user != null) {
+                    return user.getId();
+                }
+            }
+        }
+        return 1L;
+    }
 
     @PostMapping("/page")
     public Result<Page<Map<String, Object>>> pageQuery(@RequestBody LogDataQueryDTO query) {
@@ -67,7 +99,7 @@ public class LogDataController {
         for (LogDataRecord record : recordPage.getRecords()) {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("id", record.getId());
-            
+
             for (String colName : cols) {
                 String colLower = colName.toLowerCase();
                 if (colLower.equals("depth") || colLower.contains("tvd") || colLower.contains("dep")) {
@@ -84,7 +116,7 @@ public class LogDataController {
                     map.put(colName, record.getRt() != null ? record.getRt() : "");
                 }
             }
-            
+
             if (record.getExtraJson() != null && !record.getExtraJson().isEmpty()) {
                 map.putAll(record.getExtraJson());
             }
@@ -109,10 +141,13 @@ public class LogDataController {
         };
     }
 
-    
     @PostMapping("/export-batch-zip")
-    public void exportBatchZip(@RequestBody List<LogDataQueryDTO> queries, HttpServletResponse response) {
+    public void exportBatchZip(@RequestBody List<LogDataQueryDTO> queries, HttpServletRequest request, HttpServletResponse response) {
         try {
+            int exportedFileCount = 0;
+            long exportedLineCount = 0L;
+            Long userId = getUserId(request);
+
             response.setContentType("application/zip");
             response.setCharacterEncoding("utf-8");
             String zipName = URLEncoder.encode("批量测井数据导出", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
@@ -132,18 +167,20 @@ public class LogDataController {
                     query.setSize(500000);
 
                     Page<Map<String, Object>> pageData = pageQuery(query).getData();
-                    if (pageData == null || pageData.getRecords() == null || pageData.getRecords().isEmpty()) { continue; }
+                    if (pageData == null || pageData.getRecords() == null || pageData.getRecords().isEmpty()) {
+                        continue;
+                    }
 
                     List<String> cols = JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
                     List<List<String>> head = new ArrayList<>();
-                    for(String col : cols) {
+                    for (String col : cols) {
                         head.add(Collections.singletonList(col));
                     }
 
                     List<List<Object>> dataList = new ArrayList<>();
-                    for(Map<String, Object> map : pageData.getRecords()) {
+                    for (Map<String, Object> map : pageData.getRecords()) {
                         List<Object> row = new ArrayList<>();
-                        for(String col : cols) {
+                        for (String col : cols) {
                             Object val = map.get(col);
                             if (val == null) val = map.get(col.toLowerCase());
                             if (val == null) val = "";
@@ -162,9 +199,13 @@ public class LogDataController {
                             .doWrite(dataList);
 
                     zos.closeEntry();
+                    exportedFileCount++;
+                    exportedLineCount += pageData.getRecords().size();
                 }
                 zos.finish();
             }
+
+            operationLogService.recordLog("报表导出", "筛选结果批量ZIP导出", exportedFileCount, exportedLineCount, userId);
         } catch (Exception e) {
             log.error("批量导出ZIP流异常", e);
             response.setStatus(500);
@@ -172,45 +213,45 @@ public class LogDataController {
     }
 
     @PostMapping("/{fileId}/export")
-
-    public void exportExcel(@PathVariable Long fileId, @RequestBody(required = false) LogDataQueryDTO query, HttpServletResponse response) {
+    public void exportExcel(@PathVariable Long fileId, @RequestBody(required = false) LogDataQueryDTO query, HttpServletRequest request, HttpServletResponse response) {
         if (query == null) query = new LogDataQueryDTO();
         query.setFileId(fileId);
         query.setCurrent(1);
-        query.setSize(500000); 
-        
+        query.setSize(500000);
+
         Page<Map<String, Object>> pageData = pageQuery(query).getData();
-        
+
         try {
             response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
             response.setCharacterEncoding("utf-8");
             String fileName = URLEncoder.encode("Filtered_Data_" + fileId, StandardCharsets.UTF_8).replaceAll("\\+", "%20");
             response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
-            
+
             LogFileInfo fileInfo = fileInfoService.getById(fileId);
             List<String> cols = JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
-            
+
             List<List<String>> head = new ArrayList<>();
-            for(String col : cols) {
+            for (String col : cols) {
                 head.add(Collections.singletonList(col));
             }
 
             List<List<Object>> dataList = new ArrayList<>();
-            for(Map<String, Object> map : pageData.getRecords()) {
-                 List<Object> row = new ArrayList<>();
-                 for(String col : cols) {
-                     Object val = map.get(col);
-                     if (val == null) val = map.get(col.toLowerCase());
-                     if (val == null) val = "";
-                     row.add(val);
-                 }
-                 dataList.add(row);
+            for (Map<String, Object> map : pageData.getRecords()) {
+                List<Object> row = new ArrayList<>();
+                for (String col : cols) {
+                    Object val = map.get(col);
+                    if (val == null) val = map.get(col.toLowerCase());
+                    if (val == null) val = "";
+                    row.add(val);
+                }
+                dataList.add(row);
             }
 
             EasyExcel.write(response.getOutputStream())
                     .head(head)
                     .sheet("Filtered Data")
                     .doWrite(dataList);
+            operationLogService.recordLog("报表导出", "筛选结果Excel导出", 1, (long) pageData.getRecords().size(), getUserId(request));
         } catch (Exception e) {
             log.error("导出Excel异常", e);
             response.setStatus(500);
@@ -220,7 +261,7 @@ public class LogDataController {
     @GetMapping("/echarts/{fileId}")
     public Result<Map<String, List<Object>>> getEchartsData(@PathVariable Long fileId) {
         QueryWrapper<LogDataRecord> wrapper = new QueryWrapper<>();
-        wrapper.eq("file_id", fileId).orderByAsc("depth"); // 必须要按深度排序
+        wrapper.eq("file_id", fileId).orderByAsc("depth");
         List<LogDataRecord> list = dataRecordService.list(wrapper);
 
         List<Object> depths = new ArrayList<>();

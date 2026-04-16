@@ -42,6 +42,7 @@ import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { login } from '@/api/auth'
+import { setTokenPair } from '@/utils/token'
 
 const router = useRouter()
 const loginFormRef = ref(null)
@@ -63,12 +64,12 @@ const handleLogin = () => {
     if (valid) {
       loading.value = true
       try {
-        const token = await login({
+        const tokenPair = await login({
           username: loginForm.username,
           password: loginForm.password
         })
-        
-        localStorage.setItem('token', token)
+
+        setTokenPair(tokenPair)
         ElMessage.success('登录成功，欢迎访问测井系统')
         router.push('/')
       } catch (error) {

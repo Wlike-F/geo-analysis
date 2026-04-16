@@ -8,6 +8,24 @@ export function login(data) {
   })
 }
 
+export function refreshToken(data) {
+  return request({
+    url: '/auth/refresh',
+    method: 'post',
+    data,
+    skipAuthRefresh: true
+  })
+}
+
+export function logout(data) {
+  return request({
+    url: '/auth/logout',
+    method: 'post',
+    data,
+    skipAuthRefresh: true
+  })
+}
+
 export function register(data) {
   return request({
     url: '/auth/register',

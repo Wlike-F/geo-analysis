@@ -39,4 +39,8 @@ public class Result<T> {
     public static <T> Result<T> failed(ResultCode errorCode) {
         return new Result<>(errorCode.getCode(), errorCode.getMessage(), null);
     }
+
+    public static <T> Result<T> failed(ResultCode errorCode, String message) {
+        return new Result<>(errorCode.getCode(), message, null);
+    }
 }

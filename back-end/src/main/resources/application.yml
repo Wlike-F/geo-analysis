@@ -23,9 +23,5 @@ spring:
 # JWT 令牌
 jwt:
   secret: YXNkZmFzZGZjenh2Y3p4dnF3ZXJxZXdycXdlcmRzYWZhc2RmYXNkZg==
-  expiration: 86400 # 24h
-
-ai:
-  api-key: sk-sp-81f92fee05d341b896727a65735592ee
-  api-url: https://api.chatanywhere.tech/v1/chat/completions 
-  model: glm-5 
+  access-expiration: 3600 # 1h
+  refresh-expiration: 604800 # 7d

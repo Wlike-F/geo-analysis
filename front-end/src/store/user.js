@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { getUserInfo } from '@/api/user'
+import { setTokenPair as persistTokenPair, clearTokenPair } from '@/utils/token'
 
 export const useUserStore = defineStore('user', {
   state: () => ({
@@ -35,9 +36,12 @@ export const useUserStore = defineStore('user', {
         console.error('获取用户信息失败', error)
       }
     },
+    setTokenPair(tokenPair) {
+      persistTokenPair(tokenPair)
+    },
     logout() {
       this.userInfo = {}
-      localStorage.removeItem('token')
+      clearTokenPair()
     }
   }
 })

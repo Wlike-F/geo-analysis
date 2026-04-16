@@ -161,5 +161,19 @@ CREATE TABLE `log_dirty_data` (
                                   KEY `idx_file_id` (`file_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='解析失败的脏数据表';
 
+CREATE TABLE IF NOT EXISTS `sys_refresh_token` (
+  `id` BIGINT PRIMARY KEY AUTO_INCREMENT,
+  `user_id` BIGINT NOT NULL COMMENT '用户ID',
+  `token_hash` VARCHAR(64) NOT NULL COMMENT 'refresh token SHA-256哈希',
+  `expires_at` DATETIME NOT NULL COMMENT 'refresh token过期时间',
+  `revoked` TINYINT(1) DEFAULT 0 COMMENT '是否已撤销 0-否 1-是',
+  `replaced_by_token_id` BIGINT DEFAULT NULL COMMENT '轮换后新token记录ID',
+  `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,
+  `update_time` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uk_token_hash` (`token_hash`),
+  KEY `idx_user_id` (`user_id`),
+  KEY `idx_expires_at` (`expires_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='刷新令牌表';
+
 
 

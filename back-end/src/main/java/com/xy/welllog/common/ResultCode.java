@@ -1,5 +1,8 @@
 package com.xy.welllog.common;
 
+import lombok.Getter;
+
+@Getter
 public enum ResultCode {
     SUCCESS(200, "操作成功"),
     FAILED(500, "操作失败"),
@@ -15,6 +18,4 @@ public enum ResultCode {
         this.message = message;
     }
 
-    public long getCode() { return code; }
-    public String getMessage() { return message; }
 }

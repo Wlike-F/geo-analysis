@@ -1,6 +1,7 @@
 package com.xy.welllog.exception;
 
 import com.xy.welllog.common.Result;
+import com.xy.welllog.common.ResultCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -12,7 +13,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(value = BusinessException.class)
     public Result<Object> handleBusinessException(BusinessException e) {
         log.error("业务异常: {}", e.getMessage(), e);
-        return Result.failed(e.getMessage());
+        ResultCode code = e.getResultCode() != null ? e.getResultCode() : ResultCode.FAILED;
+        return Result.failed(code, e.getMessage());
     }
 
     @ExceptionHandler(value = Exception.class)

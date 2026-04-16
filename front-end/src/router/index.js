@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Layout from '@/layout/index.vue'
+import { getAccessToken } from '@/utils/token'
 
 const routes = [
   {
@@ -77,13 +78,13 @@ const routes = [
 ]
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(import.meta.env.BASE_URL),
   routes
 })
 
 // 简单的路由守卫拦截
 router.beforeEach((to, from, next) => {
-  const token = localStorage.getItem('token')
+  const token = getAccessToken()
   if (to.path !== '/login' && to.path !== '/register' && !token) {
     next('/login')
   } else {

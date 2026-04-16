@@ -99,6 +99,8 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/store/user'
+import { logout as logoutApi } from '@/api/auth'
+import { getRefreshToken } from '@/utils/token'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -117,9 +119,18 @@ const handleLogout = () => {
     confirmButtonText: '确定退出',
     cancelButtonText: '取消',
     type: 'warning',
-  }).then(() => {
-    userStore.logout()
-    router.push('/login')
+  }).then(async () => {
+    try {
+      const refreshToken = getRefreshToken()
+      if (refreshToken) {
+        await logoutApi({ refreshToken })
+      }
+    } catch (error) {
+      console.error('退出接口调用失败', error)
+    } finally {
+      userStore.logout()
+      router.push('/login')
+    }
   })
 }
 </script>

@@ -157,6 +157,8 @@ import { ElMessage } from 'element-plus'
 import { useUserStore } from '@/store/user'
 import { updateProfile, updatePwd, updateSettings } from '@/api/user'
 import { getLoginLogs } from '@/api/log'
+import { logout as logoutApi } from '@/api/auth'
+import { getRefreshToken } from '@/utils/token'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -308,8 +310,18 @@ const submitPwdChange = () => {
         })
         ElMessage.success('密码修改成功，请重新登录')
         pwdDialogVisible.value = false
-        userStore.logout()
-        router.push('/login')
+        try {
+          const refreshToken = getRefreshToken()
+          if (refreshToken) {
+            await logoutApi({ refreshToken })
+          }
+        } catch (error) {
+          console.error('退出接口调用失败', error)
+        } finally {
+          userStore.logout()
+          router.push('/login')
+        }
+        return
       } catch (error) {
         console.error(error)
       } finally {

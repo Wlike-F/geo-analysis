@@ -52,9 +52,9 @@ public class FileController {
     private final SysColumnMappingService mappingService;
     private final com.xy.welllog.service.LogFileParseService logFileParseService;
 
-     private static final String UPLOAD_DIR = "E:\\Others\\upload";
+    private static final String UPLOAD_DIR = "E:\\Others\\upload";
     // 改为 Linux 服务器上的绝对路径
-//    private static final String UPLOAD_DIR = "/www/wwwroot/xy/upload";
+    // private static final String UPLOAD_DIR = "/www/wwwroot/xy/upload";
 
     private Long getUserId(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
