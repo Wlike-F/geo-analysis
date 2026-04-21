@@ -64,7 +64,9 @@ public class LogDataController {
 
     @PostMapping("/page")
     public Result<Page<Map<String, Object>>> pageQuery(@RequestBody LogDataQueryDTO query) {
-        Page<LogDataRecord> pageParam = new Page<>(query.getCurrent(), query.getSize());
+        long current = query.getCurrent() == null || query.getCurrent() < 1 ? 1L : query.getCurrent();
+        long size = query.getSize() == null || query.getSize() < 1 ? 100L : Math.min(query.getSize(), 10000L);
+        Page<LogDataRecord> pageParam = new Page<>(current, size);
         QueryWrapper<LogDataRecord> wrapper = new QueryWrapper<>();
         wrapper.eq("file_id", query.getFileId());
 
@@ -264,29 +266,52 @@ public class LogDataController {
         wrapper.eq("file_id", fileId).orderByAsc("depth");
         List<LogDataRecord> list = dataRecordService.list(wrapper);
 
-        List<Object> depths = new ArrayList<>();
-        List<Object> acs = new ArrayList<>();
-        List<Object> dens = new ArrayList<>();
-        List<Object> grs = new ArrayList<>();
-        List<Object> sps = new ArrayList<>();
-        List<Object> rts = new ArrayList<>();
-
-        for (LogDataRecord record : list) {
-            depths.add(record.getDepth());
-            acs.add(record.getAc());
-            dens.add(record.getDen());
-            grs.add(record.getGr());
-            sps.add(record.getSp());
-            rts.add(record.getRt());
+        LogFileInfo fileInfo = fileInfoService.getById(fileId);
+        List<String> cols = new ArrayList<>();
+        if (fileInfo != null && fileInfo.getColumnsJson() != null) {
+            cols = JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
         }
 
         Map<String, List<Object>> result = new HashMap<>();
-        result.put("DEPTH", depths);
-        result.put("AC", acs);
-        result.put("DEN", dens);
-        result.put("GR", grs);
-        result.put("SP", sps);
-        result.put("RT", rts);
+        for (String col : cols) {
+            result.put(col.toUpperCase(), new ArrayList<>());
+        }
+        if (!result.containsKey("DEPTH")) {
+            result.put("DEPTH", new ArrayList<>());
+        }
+
+        for (LogDataRecord record : list) {
+            if (result.containsKey("DEPTH")) result.get("DEPTH").add(record.getDepth());
+
+            for (String colName : cols) {
+                String colLower = colName.toLowerCase();
+                String upperColName = colName.toUpperCase();
+                
+                if (colLower.equals("depth") || colLower.contains("tvd") || colLower.contains("dep")) {
+                    result.get(upperColName).add(record.getDepth());
+                } else if (colLower.equals("ac")) {
+                    result.get(upperColName).add(record.getAc());
+                } else if (colLower.equals("den")) {
+                    result.get(upperColName).add(record.getDen());
+                } else if (colLower.equals("gr")) {
+                    result.get(upperColName).add(record.getGr());
+                } else if (colLower.equals("sp")) {
+                    result.get(upperColName).add(record.getSp());
+                } else if (colLower.equals("rt")) {
+                    result.get(upperColName).add(record.getRt());
+                } else {
+                    Map<String, Object> extra = record.getExtraJson();
+                    if (extra != null && (extra.containsKey(colName) || extra.containsKey(upperColName) || extra.containsKey(colLower))) {
+                        Object val = extra.get(colName);
+                        if (val == null) val = extra.get(upperColName);
+                        if (val == null) val = extra.get(colLower);
+                        result.get(upperColName).add(val);
+                    } else {
+                        result.get(upperColName).add(null);
+                    }
+                }
+            }
+        }
 
         return Result.success(result);
     }

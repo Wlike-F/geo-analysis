@@ -1,230 +1,304 @@
-﻿<template>
+<template>
   <div class="visualization-container">
-    <el-row :gutter="20" class="full-height">
-      <!-- 左侧控制面板 -->
-      <el-col :span="6">
-        <el-card class="control-panel" shadow="hover">
-          <template #header>
-            <div class="panel-header">
+    <el-row :gutter="20" class="visualization-layout">
+      <el-col :xs="24" :lg="7" :xl="6">
+        <el-card class="custom-panel" shadow="never" :body-style="{ padding: '0' }">
+          <div class="custom-panel-header">
+            <h2 class="custom-panel-title">
               <el-icon><Setting /></el-icon>
-              <span>图表分析与异常标定</span>
-            </div>
-          </template>
+              图表分析与异常标定
+            </h2>
+            <p class="custom-panel-subtitle">选择文件、通道与异常条件后，即可生成测井交汇图与异常段明细。</p>
+          </div>
 
-          <el-form label-position="top" size="small">
-            <el-form-item label="数据源文件">
-              <el-select v-model="selectedFile" placeholder="请选择测井文件" style="width: 100%" @change="handleFileChange">
-                <el-option
-                  v-for="file in fileList"
-                  :key="file.id"
-                  :label="file.fileName"
-                  :value="file.id"
-                />
-              </el-select>
-            </el-form-item>
+          <div class="custom-panel-body">
+            <el-form label-position="top" class="analysis-form">
+              <el-form-item class="custom-form-item">
+                <template #label>
+                  <span class="custom-label">数据源文件</span>
+                </template>
+                <el-select v-model="selectedFile" class="full-width custom-select" placeholder="请选择测井文件" @change="handleFileChange">
+                  <template #prefix>
+                    <el-icon><Document /></el-icon>
+                  </template>
+                  <el-option
+                    v-for="file in fileList"
+                    :key="file.id"
+                    :label="file.fileName"
+                    :value="file.id"
+                  />
+                </el-select>
+              </el-form-item>
 
-            <el-divider />
+              <el-form-item class="custom-form-item">
+                <template #label>
+                  <span class="custom-label">曲线显示通道 <span class="custom-label-sub">（最多选 3 个）</span></span>
+                </template>
+                <el-select
+                  v-model="selectedChannels"
+                  class="full-width custom-select-multi"
+                  multiple
+                  :multiple-limit="3"
+                  placeholder="请选择绘图通道"
+                  @change="handleChannelChange"
+                >
+                  <el-option
+                    v-for="col in availableChannels"
+                    :key="col"
+                    :label="col"
+                    :value="col"
+                  />
+                </el-select>
+              </el-form-item>
 
-            <el-form-item label="曲线显示通道 (最多选3个)">
-              <el-select v-model="selectedChannels" multiple :multiple-limit="3" placeholder="请选择绘图通道" style="width: 100%" @change="handleChannelChange">
-                <el-option
-                  v-for="col in availableChannels"
-                  :key="col"
-                  :label="col"
-                  :value="col"
-                />
-              </el-select>
-            </el-form-item>
-
-            <el-divider />
-            
-            <div class="anomaly-controls">
-                <div style="margin-bottom: 8px; font-weight: bold; font-size: 13px;">异常识别条件筛选</div>
-                <div v-for="(cond, idx) in anomalyConditions" :key="idx" style="margin-bottom: 8px;">
-                    <el-row :gutter="5">
-                        <el-col :span="8">
-                            <el-select v-model="cond.channel" placeholder="特征通道" size="small">
-                                <el-option v-for="col in availableChannels" :key="col" :label="col" :value="col" />
-                            </el-select>
-                        </el-col>
-                        <el-col :span="7">
-                            <el-select v-model="cond.operator" placeholder="条件" size="small">
-                                <el-option label="大于 (>)" value=">" />
-                                <el-option label="小于 (<)" value="<" />
-                            </el-select>
-                        </el-col>
-                        <el-col :span="6">
-                            <el-input-number v-model="cond.threshold" :controls="false" placeholder="阈值" style="width:100%" size="small" />
-                        </el-col>
-                        <el-col :span="3" style="text-align:right">
-                            <el-button type="danger" icon="Delete" circle size="small" @click="removeCondition(idx)" v-if="anomalyConditions.length > 1" />
-                        </el-col>
-                    </el-row>
+              <div class="custom-section-title">
+                <el-icon><Filter /></el-icon> 异常识别条件
+              </div>
+              <section class="anomaly-controls">
+                <div v-for="(cond, idx) in anomalyConditions" :key="idx" class="condition-item">
+                  <el-row :gutter="8" class="condition-row" align="middle">
+                    <el-col :span="8">
+                      <el-select v-model="cond.channel" class="full-width custom-select-sm" placeholder="通道">
+                        <el-option v-for="col in availableChannels" :key="col" :label="col" :value="col" />
+                      </el-select>
+                    </el-col>
+                    <el-col :span="7">
+                      <el-select v-model="cond.operator" class="full-width custom-select-sm" placeholder="条件">
+                        <el-option label="大于 (>)" value=">" />
+                        <el-option label="小于 (<)" value="<" />
+                      </el-select>
+                    </el-col>
+                    <el-col :span="6">
+                      <el-input-number v-model="cond.threshold" class="full-width custom-input-number" :controls="false" placeholder="阈值" />
+                    </el-col>
+                    <el-col :span="3" class="condition-delete-col">
+                      <el-button
+                        v-if="anomalyConditions.length > 1"
+                        type="danger"
+                        icon="Delete"
+                        plain
+                        circle
+                        size="small"
+                        class="custom-delete-btn"
+                        @click="removeCondition(idx)"
+                      />
+                    </el-col>
+                  </el-row>
                 </div>
-                <el-button plain type="primary" size="small" style="width: 100%" @click="addCondition">
-                    <el-icon><Plus /></el-icon> 新增条件
+
+                <el-button class="full-width mt-10 custom-add-btn" @click="addCondition">
+                  <el-icon><Plus /></el-icon> 新增条件
                 </el-button>
+
+                <div class="custom-section-title custom-mt-3">
+                  <el-icon><Filter /></el-icon> 最短连续测点数 (去除噪点)
+                </div>
+                <div class="px-1 mt-2">
+                  <el-input-number
+                    v-model="minContinuousPoints"
+                    :min="1"
+                    :max="1000"
+                    size="small"
+                    class="full-width"
+                    style="width: 100%;"
+                  />
+                </div>
+              </section>
+
+              <div class="custom-divider"></div>
+              
+              <div class="custom-section-title custom-mt-3">
+                <el-icon><Odometer /></el-icon> 深度区间控制 (m)
+              </div>
+              <div class="depth-slider-container px-1">
+                <el-slider
+                  v-model="depthRange"
+                  range
+                  :min="minDepth"
+                  :max="maxDepth"
+                  :step="10"
+                  class="custom-slider"
+                  @change="updateDepthZoom"
+                />
+                <div class="custom-range-text" v-if="maxDepth > 0">{{ depthRange[0] }} m <span>-</span> {{ depthRange[1] }} m</div>
+                <div class="custom-range-text" v-else>暂无数据深度信息</div>
+              </div>
+
+            </el-form>
+          </div>
+          
+          <div class="custom-panel-footer">
+            <el-row :gutter="12" class="custom-action-row">
+              <el-col :span="12">
+                <el-button class="full-width custom-btn-orange" :disabled="anomalySegments.length === 0" @click="showAnomalyDialog = true">
+                  <el-icon><List /></el-icon> 查看明细 ({{ anomalySegments.length }})
+                </el-button>
+              </el-col>
+              <el-col :span="12">
+                <el-button class="full-width custom-btn-emerald" :disabled="anomalySegments.length === 0" @click="exportAnomalyData">
+                  <el-icon><Download /></el-icon> 导出 CSV
+                </el-button>
+              </el-col>
+            </el-row>
+            <el-button class="full-width custom-btn-indigo" :disabled="!selectedFile" @click="handleDraw">
+              <el-icon><DataAnalysis /></el-icon> 执行分析与渲染
+            </el-button>
+            <div class="custom-export-link-wrapper">
+              <el-button class="full-width custom-btn-indigo custom-export-btn" :disabled="!selectedFile || loading" @click="handleExport">
+                <el-icon><Picture /></el-icon> 导出高清图片
+              </el-button>
             </div>
-
-            <el-divider />
-
-            <el-form-item label="深度区间控制 (m)">
-              <el-slider
-                v-model="depthRange"
-                range
-                :min="minDepth"
-                :max="maxDepth"
-                :step="10"
-                style="margin: 0 10px;"
-                @change="updateDepthZoom"
-              />
-              <div class="range-text" v-if="maxDepth > 0">{{ depthRange[0] }}m - {{ depthRange[1] }}m</div>
-              <div class="range-text" v-else>暂无数据深度信息</div>
-            </el-form-item>
-
-            <el-divider />
-
-            <el-form-item class="action-buttons">
-              <el-button type="warning" class="full-width-btn" @click="showAnomalyDialog = true" :disabled="anomalySegments.length === 0">
-                <el-icon><List /></el-icon> 查看测井异常段明细 ({{anomalySegments.length}})
-              </el-button>
-              <el-button type="primary" class="full-width-btn mt-10" @click="handleDraw" :disabled="!selectedFile">
-                <el-icon><MagicStick /></el-icon> 执行分析与渲染
-              </el-button>
-              <el-button class="full-width-btn mt-10" @click="handleExport" :disabled="!selectedFile || loading">
-                <el-icon><Download /></el-icon> 导出高清图片
-              </el-button>
-            </el-form-item>
-          </el-form>
+          </div>
         </el-card>
       </el-col>
 
-      <!-- 右侧图表区 -->
-      <el-col :span="18">
+      <el-col :xs="24" :lg="17" :xl="18">
         <el-card class="chart-panel" shadow="hover">
           <template #header>
-            <div class="panel-header" style="justify-content: space-between">
-              <div style="display:flex; align-items:center; gap: 8px;">
-                <el-icon><DataAnalysis /></el-icon>
-                <span>多道测井异常标定交汇图</span>
+            <div class="chart-header">
+              <div>
+                <div class="panel-title">
+                  <el-icon><DataAnalysis /></el-icon>
+                  <span>多道测井异常标定交汇图</span>
+                </div>
+                <p class="panel-subtitle">支持异常段高亮映射、深度缩放与多通道联动浏览。</p>
               </div>
-              <el-tag type="danger" size="small" effect="light" round v-if="anomalySegments.length">已发现 {{anomalySegments.length}} 处异常地层</el-tag>
-              <el-tag type="info" size="small" effect="plain" round v-else>支持异常段高亮映射</el-tag>
+              <el-tag v-if="anomalySegments.length" type="danger" size="small" effect="light" round>
+                已发现 {{ anomalySegments.length }} 处异常地层
+              </el-tag>
+              <el-tag v-else type="info" size="small" effect="plain" round>
+                等待分析结果
+              </el-tag>
             </div>
           </template>
 
-          <div v-if="loading" class="skeleton-container">
-            <el-skeleton :rows="15" animated />
-            <div style="text-align:center; color:#909399; margin-top:20px;">正在对数据流进行清洗与区间匹配，请稍候...</div>
+          <div class="chart-panel__body">
+            <div v-if="loading" class="skeleton-container">
+              <el-skeleton :rows="15" animated />
+              <div class="loading-text">正在对数据流进行清洗与区间匹配，请稍候...</div>
+            </div>
+
+            <template v-else>
+              <div v-if="!fileList.length" class="chart-empty-state">
+                <el-empty description="暂无可分析文件，请先前往数据源管理上传或扫描文件" />
+              </div>
+              <div v-else class="chart-stage">
+                <div ref="chartRef" class="echarts-container"></div>
+                <div v-if="!hasChartData" class="chart-hint">请选择参数后点击“执行分析与渲染”生成图表。</div>
+              </div>
+            </template>
           </div>
-          <div v-show="!loading" ref="chartRef" class="echarts-container"></div>
         </el-card>
       </el-col>
     </el-row>
 
-    <!-- 异常明细弹窗 -->
-    <el-dialog v-model="showAnomalyDialog" width="60%" destroy-on-close>
-        <template #header>
-            <div style="display:flex; justify-content:space-between; align-items:center; padding-right:20px;">
-                <span style="font-size:16px; font-weight:bold;">提取到的异常测段明细</span>
-                <el-button type="primary" size="small" @click="exportAnomalyData">
-                    <el-icon><Download /></el-icon> 导出CSV
-                </el-button>
-            </div>
-        </template>
-        <el-table :data="anomalySegments" border stripe height="400">
-            <el-table-column type="index" label="序号" width="60" align="center" />
-            <el-table-column prop="startDepth" label="顶界深度(m)" align="center" />
-            <el-table-column prop="endDepth" label="底界深度(m)" align="center" />
-            <el-table-column label="厚度(m)" align="center">
-                <template #default="scope">
-                    <el-tag type="success">{{ (scope.row.endDepth - scope.row.startDepth).toFixed(2) }}</el-tag>
-                </template>
-            </el-table-column>
-            <el-table-column prop="maxVal" label="主特征极大值" align="center" />
-            <el-table-column prop="avgVal" label="主特征平均值" align="center" />
-        </el-table>
-        <template #footer>
-            <el-button @click="showAnomalyDialog = false">关闭</el-button>
-        </template>
+    <el-dialog v-model="showAnomalyDialog" width="60%" destroy-on-close class="anomaly-dialog">
+      <template #header>
+        <div class="dialog-header">
+          <span class="dialog-title">提取到的异常测段明细</span>
+        </div>
+      </template>
+
+      <el-table :data="anomalySegments" border stripe height="400">
+        <el-table-column type="index" label="序号" width="60" align="center" />
+        <el-table-column prop="startDepth" label="顶界深度(m)" align="center" />
+        <el-table-column prop="endDepth" label="底界深度(m)" align="center" />
+        <el-table-column label="厚度(m)" align="center">
+          <template #default="scope">
+            <el-tag type="success">{{ (scope.row.endDepth - scope.row.startDepth).toFixed(2) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="maxVal" label="主特征极大值" align="center" />
+        <el-table-column prop="avgVal" label="主特征平均值" align="center" />
+      </el-table>
+
+      <template #footer>
+        <el-button @click="showAnomalyDialog = false">关闭</el-button>
+      </template>
     </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, shallowRef, onBeforeUnmount } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import * as echarts from 'echarts'
-import { Setting, MagicStick, Download, DataAnalysis, Plus, List, Delete } from '@element-plus/icons-vue'
-import { getFileList, getEchartsData } from '@/api/file'
 import { ElMessage } from 'element-plus'
+import { DataAnalysis, Delete, Download, List, MagicStick, Plus, Setting, Picture, Document, Filter, Odometer } from '@element-plus/icons-vue'
+import { getEchartsData, getFileList } from '@/api/file'
 
-// 状态管理
 const fileList = ref([])
 const selectedFile = ref(null)
-
 const minDepth = ref(0)
 const maxDepth = ref(3000)
 const depthRange = ref([0, 3000])
-
 const availableChannels = ref([])
 const selectedChannels = ref([])
-
-// 异常判定条件 (支持多个)
-const anomalyConditions = ref([
-    { channel: '', operator: '>', threshold: 0 }
-])
-
+const anomalyConditions = ref([{ channel: '', operator: '>', threshold: 0 }])
+const minContinuousPoints = ref(1)
 const anomalySegments = ref([])
 const showAnomalyDialog = ref(false)
-
 const loading = ref(false)
-
 const chartRef = ref(null)
 const chartInstance = shallowRef(null)
-
-// 拿到的大盘数据
 const rawChartData = shallowRef({})
 
-// 获文件列表
+const hasChartData = computed(() => Array.isArray(rawChartData.value.DEPTH) && rawChartData.value.DEPTH.length > 0)
+
+const ensureChartInstance = () => {
+  if (!chartRef.value) return false
+
+  if (!chartInstance.value) {
+    chartInstance.value = echarts.init(chartRef.value)
+    return true
+  }
+
+  const currentDom = chartInstance.value.getDom?.()
+  if (currentDom !== chartRef.value) {
+    chartInstance.value.dispose()
+    chartInstance.value = echarts.init(chartRef.value)
+  }
+
+  return true
+}
+
 const fetchFileList = async () => {
   try {
     const data = await getFileList()
-    if (data && Array.isArray(data)) {
+    if (Array.isArray(data)) {
       fileList.value = data
       if (fileList.value.length > 0) {
         selectedFile.value = fileList.value[0].id
         handleFileChange()
       }
-      initChart()
-    } else {
-      initChart()
     }
   } catch (error) {
     ElMessage.error('无法连接后端获取文件列表')
-    initChart()
+  } finally {
+    nextTick(() => {
+      initChart()
+    })
   }
 }
 
-// 切换文件，重置绘图
 const handleFileChange = () => {
   rawChartData.value = {}
   availableChannels.value = []
   selectedChannels.value = []
   anomalySegments.value = []
   anomalyConditions.value = [{ channel: '', operator: '>', threshold: 0 }]
-  
-  const fileMeta = fileList.value.find(f => f.id === selectedFile.value)
-  if (fileMeta && fileMeta.columnsJson) {
-      try {
-          const cols = JSON.parse(fileMeta.columnsJson)
-          // 排除包含深度的列
-          availableChannels.value = cols.filter(c => !c.includes('深') && c.toUpperCase() !== 'DEPTH')
-          // 默认选中前三个
-          if (availableChannels.value.length > 0) {
-              selectedChannels.value = availableChannels.value.slice(0, 3)
-              anomalyConditions.value[0].channel = selectedChannels.value[0]
-          }
-      } catch(e) {}
+
+  const fileMeta = fileList.value.find(file => file.id === selectedFile.value)
+  if (fileMeta?.columnsJson) {
+    try {
+      const cols = JSON.parse(fileMeta.columnsJson)
+      availableChannels.value = cols.filter(col => !col.includes('深') && col.toUpperCase() !== 'DEPTH')
+      if (availableChannels.value.length > 0) {
+        selectedChannels.value = availableChannels.value.slice(0, 3)
+        anomalyConditions.value[0].channel = selectedChannels.value[0]
+      }
+    } catch (error) {
+      console.error(error)
+    }
   }
 
   if (chartInstance.value) {
@@ -234,26 +308,25 @@ const handleFileChange = () => {
 }
 
 const handleChannelChange = () => {
-    if (Object.keys(rawChartData.value).length > 0) {
-        updateChartData()
-    }
+  if (Object.keys(rawChartData.value).length > 0) {
+    updateChartData()
+  }
 }
 
-// 条件操作
 const addCondition = () => {
-    anomalyConditions.value.push({ 
-        channel: availableChannels.value.length > 0 ? availableChannels.value[0] : '', 
-        operator: '>', 
-        threshold: 0 
-    })
+  anomalyConditions.value.push({
+    channel: availableChannels.value.length > 0 ? availableChannels.value[0] : '',
+    operator: '>',
+    threshold: 0
+  })
 }
 
 const removeCondition = (idx) => {
-    anomalyConditions.value.splice(idx, 1)
+  anomalyConditions.value.splice(idx, 1)
 }
 
 const updateDepthZoom = () => {
-  if (chartInstance.value && rawChartData.value.DEPTH && rawChartData.value.DEPTH.length > 0) {
+  if (chartInstance.value && rawChartData.value.DEPTH?.length > 0) {
     chartInstance.value.dispatchAction({
       type: 'dataZoom',
       startValue: depthRange.value[0],
@@ -262,109 +335,92 @@ const updateDepthZoom = () => {
   }
 }
 
-// 提取异常分段算法 (支持多条件 &&)
 const extractAnomalySegments = () => {
-    anomalySegments.value = []
-    if (!rawChartData.value || !rawChartData.value.DEPTH || rawChartData.value.DEPTH.length === 0) return
-    
-    const depths = rawChartData.value.DEPTH
-    
-    // 映射当前所有的有效条件及其对应的数据集
-    const conditionsData = anomalyConditions.value.map(cond => {
-        if (!cond.channel) return null
-        let tKey = Object.keys(rawChartData.value).find(k => k.toUpperCase() === cond.channel.toUpperCase())
-        return {
-            dataArr: tKey ? rawChartData.value[tKey] : null,
-            operator: cond.operator,
-            threshold: cond.threshold || 0
-        }
-    }).filter(c => c && c.dataArr)
+  anomalySegments.value = []
+  if (!rawChartData.value?.DEPTH?.length) return
 
-    if (conditionsData.length === 0) return
-    
-    let isAnomaly = false
-    let currentSegment = null
-    let maxVal = -Infinity
-    let sumVal = 0
-    let countVal = 0
-
-    for (let i = 0; i < depths.length; i++) {
-        const d = parseFloat(depths[i])
-        
-        // 过滤深度空值范围
-        if (isNaN(d)) continue
-
-        // 检查深度区间范围限制
-        let inRange = (d >= depthRange.value[0] && d <= depthRange.value[1])
-        
-        let meetsAllConditions = inRange
-        let primaryVal = 0 // 用于记录最主要(第一个)通道的指标极值
-
-        if (inRange) {
-            for (let j = 0; j < conditionsData.length; j++) {
-                const cData = conditionsData[j]
-                const v = parseFloat(cData.dataArr[i])
-                if (isNaN(v)) {
-                    meetsAllConditions = false
-                    break
-                }
-                
-                if (j === 0) primaryVal = v
-
-                if (cData.operator === '>') {
-                    if (!(v > cData.threshold)) {
-                        meetsAllConditions = false
-                        break
-                    }
-                } else {
-                    if (!(v < cData.threshold)) {
-                        meetsAllConditions = false
-                        break
-                    }
-                }
-            }
-        }
-
-        if (meetsAllConditions) {
-            if (!isAnomaly) {
-                isAnomaly = true
-                currentSegment = { startDepth: d, endDepth: d }
-                maxVal = primaryVal
-                sumVal = primaryVal
-                countVal = 1
-            } else {
-                if (primaryVal > maxVal) maxVal = primaryVal
-                sumVal += primaryVal
-                countVal++
-            }
-        } else {
-            if (isAnomaly) {
-                currentSegment.endDepth = depths[i - 1 < 0 ? 0 : i - 1]
-                currentSegment.maxVal = maxVal.toFixed(2)
-                currentSegment.avgVal = (sumVal / countVal).toFixed(2)
-                anomalySegments.value.push(currentSegment)
-                isAnomaly = false
-            }
-        }
+  const depths = rawChartData.value.DEPTH
+  const conditionsData = anomalyConditions.value.map(cond => {
+    if (!cond.channel) return null
+    const targetKey = Object.keys(rawChartData.value).find(key => key.toUpperCase() === cond.channel.toUpperCase())
+    return {
+      dataArr: targetKey ? rawChartData.value[targetKey] : null,
+      operator: cond.operator,
+      threshold: cond.threshold || 0
     }
-    
-    // 收尾
-    if (isAnomaly) {
-        currentSegment.endDepth = depths[depths.length - 1]
+  }).filter(item => item && item.dataArr)
+
+  if (conditionsData.length === 0) return
+
+  let isAnomaly = false
+  let currentSegment = null
+  let maxVal = -Infinity
+  let sumVal = 0
+  let countVal = 0
+
+  for (let i = 0; i < depths.length; i += 1) {
+    const depth = parseFloat(depths[i])
+    if (Number.isNaN(depth)) continue
+
+    const inRange = depth >= depthRange.value[0] && depth <= depthRange.value[1]
+    let meetsAllConditions = inRange
+    let primaryVal = 0
+
+    if (inRange) {
+      for (let j = 0; j < conditionsData.length; j += 1) {
+        const cond = conditionsData[j]
+        const value = parseFloat(cond.dataArr[i])
+        if (Number.isNaN(value)) {
+          meetsAllConditions = false
+          break
+        }
+
+        if (j === 0) primaryVal = value
+        if (cond.operator === '>' ? !(value > cond.threshold) : !(value < cond.threshold)) {
+          meetsAllConditions = false
+          break
+        }
+      }
+    }
+
+    if (meetsAllConditions) {
+      if (!isAnomaly) {
+        isAnomaly = true
+        currentSegment = { startDepth: depth, endDepth: depth }
+        maxVal = primaryVal
+        sumVal = primaryVal
+        countVal = 1
+      } else {
+        if (primaryVal > maxVal) maxVal = primaryVal
+        sumVal += primaryVal
+        countVal += 1
+      }
+    } else if (isAnomaly) {
+      if (countVal >= minContinuousPoints.value) {
+        currentSegment.endDepth = depths[i - 1 < 0 ? 0 : i - 1]
         currentSegment.maxVal = maxVal.toFixed(2)
         currentSegment.avgVal = (sumVal / countVal).toFixed(2)
         anomalySegments.value.push(currentSegment)
+      }
+      isAnomaly = false
     }
+  }
+
+  if (isAnomaly && countVal >= minContinuousPoints.value) {
+    currentSegment.endDepth = depths[depths.length - 1]
+    currentSegment.maxVal = maxVal.toFixed(2)
+    currentSegment.avgVal = (sumVal / countVal).toFixed(2)
+    anomalySegments.value.push(currentSegment)
+  }
 }
 
-// 模拟绘制动作
 const handleDraw = async () => {
   if (!selectedFile.value) {
     ElMessage.warning('请先选择测井文件')
     return
   }
   if (selectedChannels.value.length === 0) {
-    ElMessage.warning('请至少选择1个显示通道')
+    ElMessage.warning('请至少选择 1 个显示通道')
     return
   }
 
@@ -373,26 +429,24 @@ const handleDraw = async () => {
     const data = await getEchartsData(selectedFile.value)
     if (data) {
       rawChartData.value = data
-      
       const keys = Object.keys(data)
-      const depthKey = keys.find(k => k.toUpperCase() === 'DEPTH') || 'DEPTH'
+      const depthKey = keys.find(key => key.toUpperCase() === 'DEPTH') || 'DEPTH'
       const depths = data[depthKey] || []
-      
-      // 映射到标准格式供后续提取使用
       rawChartData.value.DEPTH = depths
 
       if (depths.length > 0) {
-         minDepth.value = Math.floor(Math.min(...depths))
-         maxDepth.value = Math.ceil(Math.max(...depths))
-         // 重置缩放
-         depthRange.value = [minDepth.value, maxDepth.value]
+        minDepth.value = Math.floor(Math.min(...depths))
+        maxDepth.value = Math.ceil(Math.max(...depths))
+        depthRange.value = [minDepth.value, maxDepth.value]
       }
-      
-      // 提取异常数据
-      extractAnomalySegments()
 
-      ElMessage.success(`加载成功！发现 ${anomalySegments.value.length} 处异常。`)
+      extractAnomalySegments()
+      ElMessage.success(`加载成功，发现 ${anomalySegments.value.length} 处异常。`)
       nextTick(() => {
+        initChart()
+        if (chartInstance.value) {
+          chartInstance.value.resize()
+        }
         updateChartData()
         updateDepthZoom()
       })
@@ -404,28 +458,26 @@ const handleDraw = async () => {
   }
 }
 
-// 导出 CSV 功能
 const exportAnomalyData = () => {
-    if (anomalySegments.value.length === 0) {
-        ElMessage.warning('暂无异常数据可导出')
-        return
-    }
-    let csvContent = '\uFEFF' // 增加 BOM 防止中文乱码
-    csvContent += '序号,顶界深度(m),底界深度(m),厚度(m),主特征极值,主特征均值\n'
-    anomalySegments.value.forEach((row, idx) => {
-        const thickness = (row.endDepth - row.startDepth).toFixed(2)
-        csvContent += `${idx + 1},${row.startDepth},${row.endDepth},${thickness},${row.maxVal},${row.avgVal}\n`
-    })
-    
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const link = document.createElement('a')
-    link.href = URL.createObjectURL(blob)
-    link.download = `异常测段分析结果_${selectedFile.value}.csv`
-    link.click()
-    URL.revokeObjectURL(link.href)
+  if (anomalySegments.value.length === 0) {
+    ElMessage.warning('暂无异常结果可导出')
+    return
+  }
+
+  let csvContent = '\uFEFF序号,顶界深度(m),底界深度(m),厚度(m),主特征极值,主特征均值\n'
+  anomalySegments.value.forEach((row, idx) => {
+    const thickness = (row.endDepth - row.startDepth).toFixed(2)
+    csvContent += `${idx + 1},${row.startDepth},${row.endDepth},${thickness},${row.maxVal},${row.avgVal}\n`
+  })
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+  const link = document.createElement('a')
+  link.href = URL.createObjectURL(blob)
+  link.download = `异常测段分析结果_${selectedFile.value}.csv`
+  link.click()
+  URL.revokeObjectURL(link.href)
 }
 
-// 导出系统截图功能
 const handleExport = () => {
   if (!chartInstance.value) return
   const url = chartInstance.value.getDataURL({
@@ -439,182 +491,179 @@ const handleExport = () => {
   link.click()
 }
 
-// 初始化 ECharts 骨架
 const initChart = () => {
-  if (!chartRef.value) return
-  if (!chartInstance.value) {
-    chartInstance.value = echarts.init(chartRef.value)
-  }
+  if (!ensureChartInstance()) return
 
-  const option = {
+  chartInstance.value.setOption({
     title: {
-        text: '配置左侧条件后，点击 [执行分析与渲染]',
-        left: 'center',
-        top: 'middle',
-        textStyle: { color: '#ccc', fontWeight: 'normal', fontSize: 16 }
+      text: '配置左侧条件后，点击“执行分析与渲染”',
+      left: 'center',
+      top: 'middle',
+      textStyle: { color: '#c0c4cc', fontWeight: 'normal', fontSize: 16 }
     },
     tooltip: { trigger: 'none' },
-    grid: [
-      { left: '10%', right: '10%', top: '60px', bottom: '20px' }
-    ],
-    xAxis: [
-      { type: 'value', position: 'top', name: 'Wait...', nameLocation: 'middle', nameGap: 30 }
-    ],
-    yAxis: [
-      { type: 'value', inverse: true, name: 'Depth(m)', nameLocation: 'start' }
-    ],
+    grid: [{ left: '10%', right: '10%', top: '60px', bottom: '20px' }],
+    xAxis: [{ type: 'value', position: 'top', name: 'Wait...', nameLocation: 'middle', nameGap: 30 }],
+    yAxis: [{ type: 'value', inverse: true, name: 'Depth(m)', nameLocation: 'start' }],
     series: []
-  }
-  chartInstance.value.setOption(option, true)
+  }, true)
 }
 
 const updateChartData = () => {
-    if (!chartInstance.value) return
-    
-    const depth = rawChartData.value.DEPTH
-    if (!depth || depth.length === 0) return
+  if (!chartInstance.value) return
+  const depth = rawChartData.value.DEPTH
+  if (!depth?.length) return
 
-    const cCount = selectedChannels.value.length
-    
-    const grids = []
-    const xAxes = []
-    const yAxes = []
-    const series = []
-    
-    const trackColors = ['#e67c22', '#e74c3c', '#3498db']
-    
-    // 生成 MarkArea 数据, 更显眼的标识
-    const anomalyMarkArea = {
-        itemStyle: { 
-            color: 'rgba(255, 73, 73, 0.35)', // 更深沉的亮红底色
-            borderWidth: 1, 
-            borderColor: 'rgba(255, 0, 0, 0.8)', // 外边框让分界线更清晰
-            borderType: 'dashed' 
-        },
-        data: anomalySegments.value.map(seg => [
-            { yAxis: seg.startDepth },
-            { yAxis: seg.endDepth }
-        ])
-    }
+  const channelCount = selectedChannels.value.length
+  const grids = []
+  const xAxes = []
+  const yAxes = []
+  const series = []
+  const trackColors = ['#e67c22', '#e74c3c', '#3498db']
 
-    const gridWidth = Math.floor(80 / cCount)
-    let leftOffset = 8
-    
-    selectedChannels.value.forEach((colName, index) => {
-        grids.push({
-            left: `${leftOffset}%`, 
-            width: `${gridWidth}%`, 
-            top: '60px', 
-            bottom: '20px'
-        })
-        
-        xAxes.push({
-            gridIndex: index,
-            type: 'value',
-            position: 'top',
-            name: colName,
-            nameLocation: 'middle',
-            nameGap: 30,
-            axisLine: { lineStyle: { color: trackColors[index % 3] } },
-            axisLabel: { color: trackColors[index % 3], formatter: (val) => Number.isInteger(val) ? val : String(val).slice(0, 5) },
-            splitLine: { show: false }
-        })
-        
-        yAxes.push({
-            gridIndex: index,
-            type: 'value',
-            inverse: true,
-            min: 'dataMin',
-            max: 'dataMax',
-            name: index === 0 ? 'Depth(m)' : '',
-            axisLabel: { show: index === 0 },
-            axisTick: { show: index === 0 }
-        })
-        
-        // 数据适配
-        let key = Object.keys(rawChartData.value).find(k => k.toUpperCase() === colName.toUpperCase())
-        const yData = rawChartData.value[key] || []
-        
-        const lineData = depth.map((d, i) => [yData[i] || null, d]).filter(item => item[0] !== null)
-        
-        series.push({
-            name: colName,
-            type: 'line',
-            xAxisIndex: index,
-            yAxisIndex: index,
-            showSymbol: false,
-            sampling: 'lttb',
-            large: true,
-            largeThreshold: 2000,
-            itemStyle: { color: trackColors[index % 3] },
-            lineStyle: { width: 1 },
-            data: lineData,
-            // 每一个列都统一挂载高亮标识，贯穿全视窗
-            markArea: anomalyMarkArea
-        })
-        
-        leftOffset += gridWidth + (index < cCount - 1 ? 2 : 0)
+  const anomalyMarkArea = {
+    itemStyle: {
+      color: 'rgba(255, 73, 73, 0.35)',
+      borderWidth: 1,
+      borderColor: 'rgba(255, 0, 0, 0.8)',
+      borderType: 'dashed'
+    },
+    data: anomalySegments.value.map(seg => [
+      { yAxis: seg.startDepth },
+      { yAxis: seg.endDepth }
+    ])
+  }
+
+  const leftMargin = 10
+  const rightMargin = 10
+  const gap = 8 // percentage gap
+  const gridWidth = (100 - leftMargin - rightMargin - gap * (channelCount > 1 ? channelCount - 1 : 0)) / (channelCount || 1)
+  let leftOffset = leftMargin
+
+  selectedChannels.value.forEach((colName, index) => {
+    grids.push({
+      left: `${leftOffset}%`,
+      width: `${gridWidth}%`,
+      top: '60px',
+      bottom: '20px'
     })
 
-    const option = {
-        title: { text: '' },
-        grid: grids,
-        tooltip: {
-            trigger: 'axis',
-            axisPointer: { type: 'cross', animation: false },
-            formatter: function (params) {
-                if (!params || !params.length) return '';
-                let res = `<strong>深度: ${params[0].value[1]} m</strong><br/>`
-                params.forEach(item => {
-                    if(item.value[0] !== undefined && item.value[0] !== null) {
-                        res += `${item.marker} ${item.seriesName}: ${item.value[0]}<br/>`
-                    }
-                })
-                return res
-            }
-        },
-        dataZoom: [
-             {
-                 type: 'inside',
-                 xAxisIndex: null, // X轴不缩放
-                 yAxisIndex: grids.map((g, i) => i) // 同步缩放所有轨道的 Y 轴
-             }
-        ],
-        axisPointer: {
-             link: [{ yAxisIndex: 'all' }]
-        },
-        xAxis: xAxes,
-        yAxis: yAxes,
-        series: series
-    };
+    xAxes.push({
+      gridIndex: index,
+      type: 'value',
+      position: 'top',
+      name: colName,
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLine: { lineStyle: { color: trackColors[index % 3] } },
+      axisLabel: {
+        color: trackColors[index % 3],
+        hideOverlap: true,
+        formatter: (val) => Number.isInteger(val) ? val : String(val).slice(0, 5)
+      },
+      splitNumber: 3,
+      splitLine: { show: false }
+    })
 
-    chartInstance.value.setOption(option, true);
-    
-    // 同步双向数据流 - 监听滚动时更新侧边栏滑动条 (debounce保护)
-    chartInstance.value.off('datazoom');
-    chartInstance.value.on('datazoom', debounce(() => {
-        if (!chartInstance.value) return;
-        const opt = chartInstance.value.getOption();
-        if (opt && opt.dataZoom && opt.dataZoom.length > 0) {
-            const dz = opt.dataZoom[0];
-            let sVal, eVal;
-            if (dz.startValue !== undefined && dz.endValue !== undefined && !isNaN(dz.startValue)) {
-                sVal = dz.startValue;
-                eVal = dz.endValue;
-            } else if (dz.start !== undefined && dz.end !== undefined) {        
-                const totalRange = maxDepth.value - minDepth.value;
-                sVal = minDepth.value + totalRange * (dz.start / 100);
-                eVal = minDepth.value + totalRange * (dz.end / 100);
-            }
-            if (sVal !== undefined && eVal !== undefined) {
-                depthRange.value = [
-                    Math.floor(Math.min(sVal, eVal)),
-                    Math.ceil(Math.max(sVal, eVal))
-                ];
-            }
-        }
-    }, 100))
+    yAxes.push({
+      gridIndex: index,
+      type: 'value',
+      inverse: true,
+      min: minDepth.value,
+      max: maxDepth.value,
+      name: index === 0 ? 'Depth(m)' : '',
+      axisLabel: { show: index === 0 },
+      axisTick: { show: index === 0 }
+    })
+
+    const key = Object.keys(rawChartData.value).find(item => item.toUpperCase() === colName.toUpperCase())
+    const yData = rawChartData.value[key] || []
+    const lineData = depth.map((d, i) => [yData[i] || null, d]).filter(item => item[0] !== null)
+
+    series.push({
+      name: colName,
+      type: 'line',
+      xAxisIndex: index,
+      yAxisIndex: index,
+      showSymbol: false,
+      sampling: 'lttb',
+      large: true,
+      largeThreshold: 2000,
+      itemStyle: { color: trackColors[index % 3] },
+      lineStyle: { width: 1 },
+      data: lineData,
+      markArea: anomalyMarkArea
+    })
+
+    leftOffset += gridWidth + gap
+  })
+
+  chartInstance.value.setOption({
+    title: { text: '' },
+    grid: grids,
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'cross', animation: false },
+      formatter(params) {
+        if (!params?.length) return ''
+        let content = `<strong>深度: ${params[0].value[1]} m</strong><br/>`
+        params.forEach(item => {
+          if (item.value[0] !== undefined && item.value[0] !== null) {
+            content += `${item.marker} ${item.seriesName}: ${item.value[0]}<br/>`
+          }
+        })
+        return content
+      }
+    },
+    dataZoom: [{
+      type: 'inside',
+      yAxisIndex: grids.map((_, i) => i)
+    }],
+    axisPointer: { link: [{ yAxisIndex: 'all' }] },
+    xAxis: xAxes,
+    yAxis: yAxes,
+    series
+  }, true)
+
+  chartInstance.value.off('datazoom')
+  chartInstance.value.on('datazoom', debounce(() => {
+    if (!chartInstance.value) return
+    const option = chartInstance.value.getOption()
+    if (option?.dataZoom?.length) {
+      const dz = option.dataZoom[0]
+      let startValue
+      let endValue
+      if (dz.startValue !== undefined && dz.endValue !== undefined && !Number.isNaN(dz.startValue)) {
+        startValue = dz.startValue
+        endValue = dz.endValue
+      } else if (dz.start !== undefined && dz.end !== undefined) {
+        const totalRange = maxDepth.value - minDepth.value
+        startValue = minDepth.value + totalRange * (dz.start / 100)
+        endValue = minDepth.value + totalRange * (dz.end / 100)
+      }
+      if (startValue !== undefined && endValue !== undefined) {
+        depthRange.value = [
+          Math.floor(Math.min(startValue, endValue)),
+          Math.ceil(Math.max(startValue, endValue))
+        ]
+      }
+    }
+  }, 100))
 }
+
+const debounce = (fn, delay) => {
+  let timer = null
+  return function (...args) {
+    if (timer) clearTimeout(timer)
+    timer = setTimeout(() => fn.apply(this, args), delay)
+  }
+}
+
+const handleResize = debounce(() => {
+  if (chartInstance.value) {
+    chartInstance.value.resize()
+  }
+}, 200)
 
 onMounted(() => {
   fetchFileList()
@@ -628,101 +677,440 @@ onBeforeUnmount(() => {
     chartInstance.value = null
   }
 })
-
-const debounce = (fn, delay) => {
-  let timer = null
-  return function (...args) {
-    if (timer) clearTimeout(timer)
-    timer = setTimeout(() => {
-      fn.apply(this, args)
-    }, delay)
-  }
-}
-
-const handleResize = debounce(() => {
-  if (chartInstance.value) {
-    chartInstance.value.resize()
-  }
-}, 200)
 </script>
 
 <style scoped>
 .visualization-container {
-  padding: 20px;
   height: 100%;
 }
-.full-height {
-  height: 100%;
+
+.visualization-layout {
+  min-height: 100%;
+  display: flex;
+  align-items: stretch;
 }
-.panel-header {
+
+.visualization-layout > .el-col {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 20px;
+}
+
+.panel-header,
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.panel-title {
   display: flex;
   align-items: center;
   gap: 8px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--el-text-color-primary);
-  font-size: 16px;
 }
-.control-panel {
-  height: calc(100vh - 100px);
-  overflow-y: auto;
-  border-radius: 8px;
+
+.panel-subtitle {
+  margin-top: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
 }
+
+.control-panel,
 .chart-panel {
-  height: calc(100vh - 100px);
+  border-radius: 10px;
+}
+
+/* custom-panel styles based on newui.html */
+.custom-panel {
+  border-radius: 0.75rem;
+  border: 1px solid #e5e7eb;
+  background-color: #ffffff;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   display: flex;
   flex-direction: column;
-  border-radius: 8px;
-}
-.chart-panel :deep(.el-card__body) {
+  overflow: hidden;
   flex: 1;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
+  height: auto;
+  min-height: calc(100vh - 128px);
 }
-.range-row {
+.custom-panel-header {
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #f3f4f6;
+  background-color: rgba(249, 250, 251, 0.5);
+}
+.custom-panel-title {
+  font-size: 1rem;
+  line-height: 1.5rem;
+  font-weight: 600;
+  color: #1f2937;
   display: flex;
   align-items: center;
-  margin-bottom: 8px;
+  gap: 0.5rem;
+  margin: 0;
 }
-.anomaly-controls {
-  padding: 0px 5px;
+.custom-panel-title .el-icon {
+  color: #6b7280;
+  font-size: 0.875rem;
 }
+.custom-panel-subtitle {
+  font-size: 0.75rem;
+  line-height: 1.625;
+  color: #6b7280;
+  margin: 0.375rem 0 0 0;
+}
+.custom-panel-body {
+  flex: 1;
+  padding: 1.35rem 1.1rem 1rem;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+.depth-slider-container {
+  overflow: hidden;
+  padding-inline: 12px;
+}
+.custom-section-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.custom-section-title .el-icon {
+  color: #9ca3af;
+  font-size: 0.75rem;
+}
+.custom-form-item {
+  margin-bottom: 0.875rem;
+}
+.custom-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #374151;
+  line-height: 1;
+}
+.custom-label-sub {
+  color: #9ca3af;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+.custom-select .el-input__inner,
+.custom-select-multi .el-select__tags {
+  font-size: 0.875rem;
+}
+.custom-select-sm .el-input__wrapper {
+  padding: 0 0.5rem;
+}
+.custom-input-number .el-input__wrapper {
+  padding: 0 0.5rem;
+}
+.custom-input-number .el-input__inner {
+  text-align: center;
+}
+.custom-add-btn {
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.5rem 0;
+  border: 1px dashed #d1d5db;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  color: #2563eb;
+  background-color: transparent;
+  transition: colors 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.25rem;
+  height: auto;
+}
+.custom-add-btn:hover {
+  background-color: #eff6ff;
+  border-color: #60a5fa;
+  color: #2563eb;
+}
+.custom-delete-btn {
+  margin: 0;
+}
+.custom-divider {
+  border-top: 1px solid #f3f4f6;
+  padding-top: 0.5rem;
+}
+.custom-mt-3 {
+  margin-top: 0.75rem;
+}
+.custom-slider {
+  margin: 0.65rem 0 0.9rem;
+}
+.custom-slider .el-slider__runway {
+  height: 0.375rem;
+  background-color: #e5e7eb;
+}
+.custom-slider .el-slider__bar {
+  height: 0.375rem;
+  background-color: #2563eb;
+}
+.custom-slider .el-slider__button {
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 2px solid #2563eb;
+  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+}
+.custom-range-text {
+  display: flex;
+  justify-content: center;
+  font-size: 0.75rem;
+  color: #6b7280;
+}
+.custom-panel-footer {
+  padding: 0.35rem 1.1rem 1.25rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  overflow: hidden;
+}
+.custom-action-row {
+  margin-bottom: 0;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+.custom-btn-orange {
+  background-color: #fff7ed;
+  color: #ea580c;
+  border: 1px solid #fed7aa;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0.5rem 0.75rem;
+  height: auto;
+  transition: colors 0.2s;
+}
+.custom-btn-orange:hover, .custom-btn-orange:focus {
+  background-color: #ffedd5;
+  color: #ea580c;
+  border-color: #fed7aa;
+}
+.custom-btn-orange.is-disabled {
+  opacity: 0.5;
+}
+.custom-btn-emerald {
+  background-color: #ecfdf5;
+  color: #059669;
+  border: 1px solid #a7f3d0;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0.5rem 0.75rem;
+  height: auto;
+  transition: colors 0.2s;
+}
+.custom-btn-emerald:hover, .custom-btn-emerald:focus {
+  background-color: #d1fae5;
+  color: #059669;
+  border-color: #a7f3d0;
+}
+.custom-btn-emerald.is-disabled {
+  opacity: 0.5;
+}
+.custom-btn-indigo {
+  background-color: #4338ca;
+  color: #ffffff;
+  border: none;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0.625rem 0;
+  height: auto;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: background-color 0.2s;
+}
+.custom-btn-indigo:hover, .custom-btn-indigo:focus {
+  background-color: #3730a3;
+  color: #ffffff;
+}
+.custom-btn-indigo.is-disabled {
+  background-color: #818cf8;
+}
+.custom-export-link-wrapper {
+  width: 100%;
+  margin-top: 0.25rem;
+}
+.custom-export-btn {
+  width: 100%;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #4338ca;
+  padding: 0.625rem 0;
+  border-radius: 0.5rem;
+  border: 1px solid #c7d2fe;
+  background-color: #eef2ff;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+}
+.custom-export-btn:hover,
+.custom-export-btn:focus {
+  color: #3730a3;
+  background-color: #e0e7ff;
+  border-color: #a5b4fc;
+}
+.custom-export-btn.is-disabled {
+  opacity: 0.5;
+  color: #818cf8;
+  background-color: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.analysis-form {
+  padding-top: 4px;
+}
+
+.section-mini-desc {
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--el-text-color-secondary);
+}
+
+.condition-item + .condition-item {
+  margin-top: 8px;
+}
+
+.condition-delete-col {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.condition-row {
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.depth-slider {
+  margin: 0 10px;
+}
+
+.range-text {
+  margin-top: 6px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
 .action-buttons {
-  margin-top: 20px;
+  margin-top: 24px;
 }
+
+.full-width,
 .full-width-btn {
   width: 100%;
 }
+
 .mt-10 {
   margin-top: 15px;
   margin-left: 0 !important;
 }
+
+.chart-panel {
+  flex: 1;
+  height: auto;
+  min-height: calc(100vh - 128px);
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-panel :deep(.el-card__body) {
+  flex: 1;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+}
+
+.chart-panel__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
 .skeleton-container {
   flex: 1;
   padding: 30px;
 }
+
+.loading-text {
+  margin-top: 20px;
+  text-align: center;
+  color: #909399;
+}
+
+.chart-empty-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chart-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
 .echarts-container {
   flex: 1;
   width: 100%;
-  min-height: 500px;
+  min-height: 0;
 }
-.range-text {
+
+.chart-hint {
+  margin-top: 12px;
   text-align: center;
-  width: 100%;
-  color: var(--el-text-color-secondary);
   font-size: 13px;
-  margin-top: 5px;
+  color: var(--el-text-color-secondary);
+}
+
+.dialog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding-right: 20px;
+}
+
+.dialog-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+@media (max-width: 1200px) {
+  .custom-panel,
+  .chart-panel {
+    height: auto;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .chart-header,
+  .dialog-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .condition-delete-col {
+    justify-content: flex-start;
+  }
+
+  .echarts-container {
+    min-height: 420px;
+  }
 }
 </style>
-
-
-
-
-
-
-
-
-
-
-
-

@@ -10,9 +10,7 @@ import com.xy.welllog.dto.PreviewResultDTO;
 import com.xy.welllog.dto.ConfirmUploadDTO;
 import com.xy.welllog.entity.LogFileInfo;
 import com.xy.welllog.entity.SysUser;
-import com.xy.welllog.service.LogDataRecordService;
-import com.xy.welllog.service.LogFileInfoService;
-import com.xy.welllog.service.SysOperationLogService;
+import com.xy.welllog.service.*;
 import com.xy.welllog.utils.JwtUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -35,8 +33,6 @@ import java.util.zip.ZipEntry;
 import com.alibaba.excel.ExcelWriter;
 import com.alibaba.excel.write.metadata.WriteSheet;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
-import com.xy.welllog.service.SysUserService;
-import com.xy.welllog.service.SysColumnMappingService;
 
 @Slf4j
 @RestController
@@ -50,9 +46,10 @@ public class FileController {
     private final LogDataRecordService dataRecordService;
     private final JwtUtils jwtUtils;
     private final SysColumnMappingService mappingService;
-    private final com.xy.welllog.service.LogFileParseService logFileParseService;
+    private final LogFileParseService logFileParseService;
 
-    private static final String UPLOAD_DIR = "E:\\Others\\upload";
+    private static final String UPLOAD_DIR = "E:\\Others\\upload"; // 主目录
+    private static final String UPLOAD_DIR_TO = "C:\\project-upload"; // 备用目录
     // 改为 Linux 服务器上的绝对路径
     // private static final String UPLOAD_DIR = "/www/wwwroot/xy/upload";
 
@@ -81,11 +78,23 @@ public class FileController {
             return Result.failed("文件内容为空");
         }
         try {
-            if (!FileUtil.isDirectory(UPLOAD_DIR)) {
-                FileUtil.mkdir(UPLOAD_DIR);
+            // 如果目录不存在，创建目录UPLOAD_DIR，创建失败的话
+            // 启用临时目录UPLOAD_DIR_TO，UPLOAD_DIR_TO目录不存在则创建
+            if (!FileUtil.exist(UPLOAD_DIR)) {
+                boolean created = FileUtil.mkdir(UPLOAD_DIR) != null;
+                if (!created || !FileUtil.exist(UPLOAD_DIR)) {
+                    log.warn("主上传目录 [{}] 创建失败，启用备用目录 [{}]", UPLOAD_DIR, UPLOAD_DIR_TO);
+                    if (!FileUtil.exist(UPLOAD_DIR_TO)) {
+                        boolean backupCreated = FileUtil.mkdir(UPLOAD_DIR_TO) != null;
+                        if (!backupCreated || !FileUtil.exist(UPLOAD_DIR_TO)) {
+                            log.error("备用上传目录 [{}] 也创建失败", UPLOAD_DIR_TO);
+                            return Result.failed("文件上传目录不可用");
+                        }
+                    }
+                }
             }
             String originalFileName = file.getOriginalFilename();
-            String tempName = UUID.randomUUID().toString() + "_" + originalFileName;
+            String tempName = UUID.randomUUID() + "_" + originalFileName;
             File destTempFile = new File(UPLOAD_DIR, tempName);
             file.transferTo(destTempFile);
 
@@ -271,9 +280,11 @@ public class FileController {
     }
 
     @GetMapping("/list")
-    public Result<List<LogFileInfo>> getFileList() {
+    public Result<List<LogFileInfo>> getFileList(HttpServletRequest request) {
         LambdaQueryWrapper<LogFileInfo> wrapper = new LambdaQueryWrapper<>();
-        wrapper.in(LogFileInfo::getStatus, Arrays.asList(0, 1, -1)).orderByDesc(LogFileInfo::getCreateTime);
+        wrapper.in(LogFileInfo::getStatus, Arrays.asList(0, 1, -1))
+               .eq(LogFileInfo::getUserId, getUserId(request))
+               .orderByDesc(LogFileInfo::getCreateTime);
         return Result.success(fileInfoService.list(wrapper));
     }
 

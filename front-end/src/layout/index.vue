@@ -33,22 +33,22 @@
         
         <el-menu-item index="/visualization">
           <el-icon><DataAnalysis /></el-icon>
-          <template #title><span>曲线可视化</span></template>
+          <template #title><span>异常测段可视化</span></template>
+        </el-menu-item>
+        
+        <el-menu-item index="/dictionary">
+          <el-icon><Key /></el-icon>
+          <template #title><span>字典映射参数</span></template>
         </el-menu-item>
 
         <el-menu-item index="/user" v-if="userStore.isAdmin">
           <el-icon><User /></el-icon>
           <template #title><span>用户管理</span></template>
         </el-menu-item>
-        
+
         <el-menu-item index="/instructions">
           <el-icon><Reading /></el-icon>
           <template #title><span>使用说明</span></template>
-        </el-menu-item>
-
-        <el-menu-item index="/dictionary">
-          <el-icon><Key /></el-icon>
-          <template #title><span>字典映射参数</span></template>
         </el-menu-item>
 
         <el-menu-item index="/settings">

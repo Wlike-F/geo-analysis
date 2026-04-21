@@ -1,230 +1,235 @@
 <template>
   <div class="files-container">
-    <!-- 顶部步骤条 -->
     <el-card shadow="never" class="mb-20 step-card">
       <el-steps :active="activeStep" align-center finish-status="success">
-        <el-step title="第一步：数据加载" description="本地上传或服务器读取" />
+        <el-step title="第一步：数据选择" description="从数据源选择文件" />
         <el-step title="第二步：阈值筛选" description="多文件或单文件条件过滤" />
-        <el-step title="第三步：多表导出" description="一键提取并下载Excel" />
+        <el-step title="第三步：结果导出" description="按筛选结果批量导出文件" />
       </el-steps>
     </el-card>
 
-    
-    <!-- 顶部操作区 -->
     <el-card shadow="hover" class="action-card mb-20">
       <el-row :gutter="20" align="middle">
         <el-col :xs="24" :sm="24" :md="6" class="mb-xs">
-          <div class="action-title">数据加载</div>
+          <div class="action-title">数据选择</div>
           <p class="action-desc">从基础数据源中心选择已挂载的测井文件。</p>
         </el-col>
 
-        <el-col :xs="24" :sm="24" :md="18" style="display: flex; gap: 10px; align-items: center;">
+        <el-col :xs="24" :sm="24" :md="18" class="action-buttons-col">
           <el-button type="primary" icon="FolderOpened" @click="openFileSelector">选择文件</el-button>
-          <el-button type="danger" icon="Delete" plain @click="closeAllTabs" :disabled="!tabs.length">重置选择文件</el-button>
+          <el-button type="danger" icon="Delete" plain @click="closeAllTabs" :disabled="!tabs.length">清空已选文件</el-button>
         </el-col>
       </el-row>
     </el-card>
 
-    <!-- 全局多文件批量操作区 -->
-    <el-card shadow="never" class="elegant-filters mb-20" v-if="tabs.length > 0">
+    <el-card v-if="tabs.length > 0" shadow="never" class="elegant-filters mb-20">
       <div class="filter-header">
         <span class="title">多文件统一筛选</span>
         <div class="actions">
           <el-button type="primary" icon="Filter" @click="applyGlobalFilters">统一提取全部</el-button>
           <el-dropdown @command="handleExportCommand">
             <el-button color="var(--el-color-success)" plain>
-              <el-icon style="margin-right: 5px;"><Download /></el-icon> 批量打包导出<el-icon class="el-icon--right"><ArrowDown /></el-icon>
+              <el-icon class="button-icon"><Download /></el-icon>
+              批量导出
+              <el-icon class="el-icon--right"><ArrowDown /></el-icon>
             </el-button>
             <template #dropdown>
               <el-dropdown-menu>
-                <el-dropdown-item command="sheet">多Sheet表格 (.xlsx)</el-dropdown-item>
-                <el-dropdown-item command="zip">多文件压缩包 (.zip)</el-dropdown-item>
+                <el-dropdown-item command="sheet">Excel 多 Sheet (.xlsx)</el-dropdown-item>
+                <el-dropdown-item command="zip">压缩包 (.zip)</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
         </div>
       </div>
+
       <div class="filter-grid">
-        <div class="f-group" v-for="key in Object.keys(globalFilters)" :key="key">
+        <div v-for="key in Object.keys(globalFilters)" :key="key" class="f-group">
           <span class="f-label">{{ key }}</span>
-          <el-input class="f-input" v-model="globalFilters[key].min" placeholder="Min" clearable />
+          <el-input v-model="globalFilters[key].min" class="f-input" placeholder="Min" clearable />
           <span class="f-sep">-</span>
-          <el-input class="f-input" v-model="globalFilters[key].max" placeholder="Max" clearable />
+          <el-input v-model="globalFilters[key].max" class="f-input" placeholder="Max" clearable />
         </div>
       </div>
     </el-card>
 
-    <!-- 数据与高级分析区 (左右布局: 左侧Tabs, 右侧高级分析) -->
-    <div style="display: flex; gap: 20px;" class="split-layout">
-      <!-- 左侧: 表格展示 -->
-      <el-card shadow="always" class="tabs-card" style="min-height: 500px; flex-grow: 1; min-width: 0; width: 100%;">
-      <div v-if="tabs.length === 0" class="empty-state">
-        <el-empty description="暂无测井数据，请在上方加载文件" />
-      </div>
-      
-      <el-tabs 
-        v-else 
-        v-model="activeTabName" 
-        type="border-card" 
-        closable 
-        @tab-remove="removeTab"
-      >
-        <el-tab-pane
-          v-for="item in tabs"
-          :key="item.name"
-          :label="item.title"
-          :name="item.name"
+    <div class="split-layout">
+      <el-card shadow="always" class="tabs-card">
+        <div v-if="tabs.length === 0" class="empty-state">
+          <el-empty description="暂无测井数据，请先在上方选择文件" />
+        </div>
+
+        <el-tabs
+          v-else
+          v-model="activeTabName"
+          type="border-card"
+          closable
+          @tab-remove="removeTab"
         >
-          <!-- 阈值筛选操作区 -->
-          <div class="filter-bar mb-20 p-15 bg-gray">
-            <el-row :gutter="20" align="middle" style="width: 100%;">
-              <!-- 左侧 2x2 网格条件筛选 -->
-              <el-col :xs="24" :lg="16">
-                <!-- 动态列筛选 -->
-                <el-row :gutter="20">
-                  <el-col :xs="24" :sm="12" :md="12" style="margin-bottom: 12px;" v-for="col in item.columns" :key="col">
-                    <div class="flex-center">
-                      <span class="filter-label" style="width: 60px; font-weight: bold; color: #606266;">{{ col }}</span>
-                      <el-input v-model="item.filters[col].min" placeholder="最小值" clearable style="width: 120px;" />
-                      <span class="separator" style="margin: 0 10px; color: #909399;">-</span>
-                      <el-input v-model="item.filters[col].max" placeholder="最大值" clearable style="width: 120px;" />
-                    </div>
-                  </el-col>
-                </el-row>
-              </el-col>
+          <el-tab-pane
+            v-for="item in tabs"
+            :key="item.name"
+            :label="item.title"
+            :name="item.name"
+          >
+            <div class="filter-bar mb-20 p-15 bg-gray">
+              <el-row :gutter="20" class="filter-row" align="middle">
+                <el-col :xs="24" :lg="16">
+                  <el-row :gutter="20">
+                    <el-col
+                      v-for="col in item.columns"
+                      :key="col"
+                      :xs="24"
+                      :sm="12"
+                      :md="12"
+                      class="filter-item-col"
+                    >
+                      <div class="flex-center">
+                        <span class="filter-label filter-label-fixed">{{ col }}</span>
+                        <el-input v-model="item.filters[col].min" class="range-input" placeholder="最小值" clearable />
+                        <span class="separator">-</span>
+                        <el-input v-model="item.filters[col].max" class="range-input" placeholder="最大值" clearable />
+                      </div>
+                    </el-col>
+                  </el-row>
+                </el-col>
 
-              <el-col :span="8" style="display: flex; flex-direction: column; align-items: flex-end; justify-content: center; border-left: 1px solid #EBEEF5; padding-left: 20px;">
-                <div style="margin-bottom: 12px; display: flex; gap: 10px;">
-                  <el-button type="primary" icon="Filter" @click="applyFilters(item)">提取数据</el-button>
-                  <el-button type="info" icon="Refresh" @click="clearFilters(item)" plain>清除筛选</el-button>
-                  <el-button type="success" icon="Download" @click="exportToExcel(item)" plain>生成 Excel</el-button>
-                </div>
-                <div class="count-tip" style="font-size: 13px; color: #606266;">
-                  筛选总记录数: <strong class="text-primary" style="font-size: 16px;">{{ item.totalRows }}</strong> 行
-                </div>
-              </el-col>
-            </el-row>
-          </div>
+                <el-col :xs="24" :lg="8" class="filter-actions-col">
+                  <div class="filter-actions">
+                    <el-button type="primary" icon="Filter" @click="applyFilters(item)">提取数据</el-button>
+                    <el-button type="info" icon="Refresh" plain @click="clearFilters(item)">清除筛选</el-button>
+                    <el-button type="success" icon="Download" plain @click="exportToExcel(item)">导出 Excel</el-button>
+                  </div>
+                  <div class="count-tip">
+                    筛选总记录数：<strong class="count-value">{{ item.totalRows }}</strong> 行
+                  </div>
+                </el-col>
+              </el-row>
+            </div>
 
-          <!-- 第一版表格：前端截取前 300 行展示数据 (或使用过滤后的 displayData ) -->
-          <div class="table-wrapper">
-            <el-table
-              :data="item.displayData"
-              border 
-              stripe 
-              style="width: 100%"
-              height="550"
-              v-loading="item.loading"
-              element-loading-text="正在极速解析测井数据中..."
-              :header-cell-style="{ background: '#f5f7fa', color: '#303133', fontWeight: 'bold' }"
-            >
-              <!-- 增加自增序号体现测点 -->
-              <el-table-column type="index" label="测点序列" width="80" align="center" fixed />
-                <el-table-column 
-                  v-for="col in item.columns" 
-                  :key="col" 
-                  :prop="col" 
-                  :label="col" 
+            <div class="table-wrapper">
+              <el-table
+                :data="item.displayData"
+                border
+                stripe
+                height="550"
+                v-loading="item.loading"
+                element-loading-text="正在加载数据，请稍候..."
+              >
+                <el-table-column type="index" label="测点序列" width="80" align="center" fixed />
+                <el-table-column
+                  v-for="col in item.columns"
+                  :key="col"
+                  :prop="col"
+                  :label="col"
                   min-width="140"
                   align="center"
                 />
               </el-table>
-          </div>
+            </div>
 
-          <!-- 分页组件 -->
-          <div class="pagination-container" style="margin-top: 15px; display: flex; justify-content: flex-end;">
-            <el-pagination
-              v-model:current-page="item.currentPage"
-              v-model:page-size="item.pageSize"
-              :page-sizes="[100, 200, 500, 1000]"
-              layout="total, sizes, prev, pager, next, jumper"
-              :total="item.totalRows"
-              @size-change="(size) => handleSizeChange(item, size)"
-              @current-change="(page) => handleCurrentChange(item, page)"
-            />
-          </div>
-
-        </el-tab-pane>
-            </el-tabs>
-    </el-card>
-
-    <!-- 右侧: 连续测段异常厚度分析 -->
-    <!-- 右侧提取功能已被移除 -->
-  </div>
-  </div>
-
-  <!-- 选择文件弹窗 -->
-  <el-dialog v-model="fileDialogVisible" title="选择测井文件" width="70%" destroy-on-close>
-    <div style="margin-bottom: 15px; display: flex; gap: 10px;">
-      <el-input v-model="filePageParams.fileName" placeholder="按文件名搜索" clearable @clear="handleFileSearch" @keyup.enter="handleFileSearch" style="width: 250px" />
-      <el-button type="primary" @click="handleFileSearch">搜索</el-button>
+            <div class="pagination-container">
+              <el-pagination
+                v-model:current-page="item.currentPage"
+                v-model:page-size="item.pageSize"
+                :page-sizes="[100, 200, 500, 1000]"
+                layout="total, sizes, prev, pager, next, jumper"
+                :total="item.totalRows"
+                @size-change="(size) => handleSizeChange(item, size)"
+                @current-change="(page) => handleCurrentChange(item, page)"
+              />
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </el-card>
     </div>
-    <el-table
-      ref="fileTableRef"
-      :data="fileTableData"
-      border
-      row-key="id"
-      @selection-change="handleSelectionChange"
-      height="400px"
-      v-loading="fileTableLoading"
-    >
-      <el-table-column type="selection" width="55" :reserve-selection="true"></el-table-column>
-      <el-table-column prop="id" label="ID" width="80"></el-table-column>
-      <el-table-column prop="fileName" label="文件名" show-overflow-tooltip></el-table-column>
-      <el-table-column prop="totalRows" label="总行数" width="120"></el-table-column>
-      <el-table-column prop="createTime" label="上传时间" width="180"></el-table-column>
-    </el-table>
-    <div style="margin-top: 15px; display: flex; justify-content: flex-end;">
-      <el-pagination
-        v-model:current-page="filePageParams.current"
-        v-model:page-size="filePageParams.size"
-        :page-sizes="[10, 20, 50, 100]"
-        layout="total, sizes, prev, pager, next"
-        :total="fileTotal"
-        @size-change="handleFileSizeChange"
-        @current-change="handleFileCurrentChange"
-      />
-    </div>
-    <template #footer>
-      <span class="dialog-footer">
-        <el-button @click="fileDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="confirmFileSelection">确认选择 (已选 {{ dialogSelectedRows.length }})</el-button>
-      </span>
-    </template>
-  </el-dialog>
+
+    <el-dialog v-model="fileDialogVisible" title="选择测井文件" width="70%" destroy-on-close>
+      <div class="dialog-toolbar">
+        <el-input
+          v-model="filePageParams.fileName"
+          class="dialog-search-input"
+          placeholder="按文件名搜索"
+          clearable
+          @clear="handleFileSearch"
+          @keyup.enter="handleFileSearch"
+        />
+        <el-button type="primary" @click="handleFileSearch">搜索</el-button>
+      </div>
+
+      <el-table
+        ref="fileTableRef"
+        :data="fileTableData"
+        border
+        row-key="id"
+        height="400px"
+        v-loading="fileTableLoading"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="55" :reserve-selection="true" />
+        <el-table-column prop="id" label="ID" width="80" />
+        <el-table-column prop="fileName" label="文件名" show-overflow-tooltip />
+        <el-table-column prop="totalRows" label="总行数" width="120" />
+        <el-table-column prop="createTime" label="上传时间" width="180" />
+      </el-table>
+
+      <div class="dialog-pagination">
+        <el-pagination
+          v-model:current-page="filePageParams.current"
+          v-model:page-size="filePageParams.size"
+          :page-sizes="[10, 20, 50, 100]"
+          layout="total, sizes, prev, pager, next"
+          :total="fileTotal"
+          @size-change="handleFileSizeChange"
+          @current-change="handleFileCurrentChange"
+        />
+      </div>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="fileDialogVisible = false">取消</el-button>
+          <el-button type="primary" @click="confirmFileSelection">确认选择（已选 {{ dialogSelectedRows.length }}）</el-button>
+        </span>
+      </template>
+    </el-dialog>
+  </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, reactive, nextTick } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Download, ArrowDown } from '@element-plus/icons-vue'
-import { getFileList, getPageData, exportFilteredExcel, getFilePage, exportBatchZipStream } from '@/api/file'
+import { ArrowDown, Download } from '@element-plus/icons-vue'
+import { exportBatchZipStream, exportFilteredExcel, getFileList, getFilePage, getPageData } from '@/api/file'
 
-const visibleRowsLimit = ref(100)
-const serverPath = ref('')
 const activeTabName = ref('')
 const tabs = ref([])
 const fileList = ref([])
-
-
 const selectedFiles = ref([])
-
-// --- 文件选择弹窗逻辑 ---
 const fileDialogVisible = ref(false)
 const fileTableData = ref([])
 const fileTotal = ref(0)
 const fileTableLoading = ref(false)
+const fileTableRef = ref(null)
+const dialogSelectedRows = ref([])
+const globalFilters = ref({})
+
 const filePageParams = reactive({
   current: 1,
   size: 10,
   fileName: ''
 })
-const fileTableRef = ref(null)
-const dialogSelectedRows = ref([])
+
+let tabIndex = 0
+
+const activeStep = computed(() => {
+  if (tabs.value.length === 0) return 0
+  const hasExtracted = tabs.value.some(tab => tab.displayData?.length > 0 && tab.hasFiltered)
+  return hasExtracted ? 2 : 1
+})
 
 const openFileSelector = () => {
   fileDialogVisible.value = true
-  fetchFilePage() // 每次打开刷新当前页
+  fetchFilePage()
 }
 
 const handleFileSearch = () => {
@@ -261,16 +266,14 @@ const handleSelectionChange = (rows) => {
 
 const confirmFileSelection = () => {
   dialogSelectedRows.value.forEach(row => {
-    if (!fileList.value.some(f => f.id === row.id)) {
+    if (!fileList.value.some(file => file.id === row.id)) {
       fileList.value.push(row)
     }
   })
-  selectedFiles.value = dialogSelectedRows.value.map(r => r.id)
+  selectedFiles.value = dialogSelectedRows.value.map(row => row.id)
   handleFileSelect()
   fileDialogVisible.value = false
 }
-// --- 结束 ---
-let tabIndex = 0
 
 const loadFileList = async () => {
   try {
@@ -285,134 +288,107 @@ onMounted(() => {
   loadFileList()
 })
 
-const activeStep = computed(() => {
-  if (tabs.value.length === 0) return 0;
-  const hasExtracted = tabs.value.some(tab => tab.displayData && tab.displayData.length > 0 && tab.hasFiltered);
-  if (hasExtracted) return 2;
-  return 1;
-})
-
-const globalFilters = ref({})
 const updateGlobalFilters = () => {
-  const keys = new Set();
-  tabs.value.forEach(t => t.columns.forEach(c => keys.add(c)));
-  keys.forEach(k => {
-    if (!globalFilters.value[k]) {
-      globalFilters.value[k] = { min: '', max: '' }
+  const keys = new Set()
+  tabs.value.forEach(tab => tab.columns.forEach(col => keys.add(col)))
+
+  keys.forEach(key => {
+    if (!globalFilters.value[key]) {
+      globalFilters.value[key] = { min: '', max: '' }
     }
-  });
-  tabs.value.forEach(t => {
-    t.columns.forEach(c => {
-      if(!t.filters[c]) t.filters[c] = { min: '', max: '' }
-    })
-  });
-}
-
-const applyGlobalFilters = () => {
-  if (tabs.value.length === 0) {
-    ElMessage.warning('目前没有任何文件可以提取')
-    return
-  }
-  tabs.value.forEach(tab => {
-    tab.filters = JSON.parse(JSON.stringify(globalFilters.value))
-    applyFilters(tab)
   })
-  ElMessage.success('已统一套用筛选条件至全部 ' + tabs.value.length + ' 个文件！')
+
+  tabs.value.forEach(tab => {
+    tab.columns.forEach(col => {
+      if (!tab.filters[col]) {
+        tab.filters[col] = { min: '', max: '' }
+      }
+    })
+  })
 }
 
-// 提取当前tab对象的过滤参数格式
 const buildFiltersParam = (tabObj) => {
-  let params = {};
+  const params = {}
   if (tabObj.filters) {
     for (const [col, range] of Object.entries(tabObj.filters)) {
       if ((range.min !== '' && range.min !== null) || (range.max !== '' && range.max !== null)) {
         params[col] = {
-           min: range.min !== '' ? Number(range.min) : null,
-           max: range.max !== '' ? Number(range.max) : null
-        };
+          min: range.min !== '' ? Number(range.min) : null,
+          max: range.max !== '' ? Number(range.max) : null
+        }
       }
     }
   }
-  return Object.keys(params).length > 0 ? params : null;
+  return Object.keys(params).length > 0 ? params : null
 }
 
-// 分页拉取服务端数据
 const fetchPageData = async (tabObj) => {
   tabObj.loading = true
   try {
-    const filters = buildFiltersParam(tabObj)
     const payload = {
-       fileId: tabObj.fileId,
-       current: tabObj.currentPage,
-       size: tabObj.pageSize,
-       filters: filters
+      fileId: tabObj.fileId,
+      current: tabObj.currentPage,
+      size: tabObj.pageSize,
+      filters: buildFiltersParam(tabObj)
     }
     const res = await getPageData(payload)
     tabObj.displayData = res.records || []
     tabObj.totalRows = res.total || 0
-  } catch (err) {
-    console.error(err)
+  } catch (error) {
+    console.error(error)
   } finally {
     tabObj.loading = false
   }
 }
 
 const handleSizeChange = (tabObj, size) => {
-  tabObj.pageSize = size;
-  tabObj.currentPage = 1;
-  fetchPageData(tabObj);
+  tabObj.pageSize = size
+  tabObj.currentPage = 1
+  fetchPageData(tabObj)
 }
 
 const handleCurrentChange = (tabObj, page) => {
-  tabObj.currentPage = page;
-  fetchPageData(tabObj);
+  tabObj.currentPage = page
+  fetchPageData(tabObj)
 }
 
 const handleFileSelect = () => {
-  // Sync the tabs with the selected files
   const selectedIds = selectedFiles.value
 
-  // 1. Remove tabs that are no longer selected
   tabs.value = tabs.value.filter(tab => selectedIds.includes(tab.fileId))
 
-  // 2. Add new tabs for newly selected files
   selectedIds.forEach(id => {
     if (!tabs.value.some(tab => tab.fileId === id)) {
-      const fileInfo = fileList.value.find(f => f.id === id)
-      if (fileInfo) {
-        const newTabName = 'tab_' + (++tabIndex)
-        let parsedColumns = []
-        try {
-          parsedColumns = JSON.parse(fileInfo.columnsJson)
-        } catch (e) {
-          console.error('Failed to parse columnsJson')
-        }
+      const fileInfo = fileList.value.find(file => file.id === id)
+      if (!fileInfo) return
 
-        const newTab = {
-          title: fileInfo.fileName,
-          name: newTabName,
-          fileId: fileInfo.id,
-          columns: parsedColumns,
-          displayData: [],
-          filters: Object.fromEntries(parsedColumns.map(c => [c, {min: "", max: ""}])),
-          currentPage: 1,
-          pageSize: 100,
-          totalRows: fileInfo.totalRows || 0,
-          loading: false,
-          hasFiltered: false
-        }
-        
-        tabs.value.push(newTab)
-
-        // Fetch data immediately using the proxied object
-        const latestTab = tabs.value[tabs.value.length - 1];
-        fetchPageData(latestTab)
+      let parsedColumns = []
+      try {
+        parsedColumns = JSON.parse(fileInfo.columnsJson || '[]')
+      } catch (error) {
+        console.error('Failed to parse columnsJson', error)
       }
+
+      const newTab = {
+        title: fileInfo.fileName,
+        name: `tab_${++tabIndex}`,
+        fileId: fileInfo.id,
+        columns: parsedColumns,
+        displayData: [],
+        filters: Object.fromEntries(parsedColumns.map(col => [col, { min: '', max: '' }])),
+        currentPage: 1,
+        pageSize: 100,
+        totalRows: fileInfo.totalRows || 0,
+        loading: false,
+        hasFiltered: false
+      }
+
+      tabs.value.push(newTab)
+      fetchPageData(newTab)
     }
   })
 
-  // Ensure active tab points to a valid remaining tab
-  if (tabs.value.length > 0 && !tabs.value.some(t => t.name === activeTabName.value)) {
+  if (tabs.value.length > 0 && !tabs.value.some(tab => tab.name === activeTabName.value)) {
     activeTabName.value = tabs.value[tabs.value.length - 1].name
   } else if (tabs.value.length === 0) {
     activeTabName.value = ''
@@ -422,61 +398,74 @@ const handleFileSelect = () => {
 }
 
 const closeAllTabs = () => {
-  tabs.value = [];
-  activeTabName.value = '';
-  selectedFiles.value = [];
-  dialogSelectedRows.value = [];
+  tabs.value = []
+  activeTabName.value = ''
+  selectedFiles.value = []
+  dialogSelectedRows.value = []
+  globalFilters.value = {}
   if (fileTableRef.value) {
-    fileTableRef.value.clearSelection();
+    fileTableRef.value.clearSelection()
   }
-};
+}
 
 const removeTab = (targetName) => {
-  const tbs = tabs.value
-  let activeName = activeTabName.value
+  const currentTabs = tabs.value
+  let nextActiveName = activeTabName.value
+  const targetTab = currentTabs.find(tab => tab.name === targetName)
 
-  const targetTab = tbs.find(t => t.name === targetName)
   if (targetTab) {
     selectedFiles.value = selectedFiles.value.filter(id => id !== targetTab.fileId)
-    // Synchronize the table selection to remove the tab's file
+    dialogSelectedRows.value = dialogSelectedRows.value.filter(row => row.id !== targetTab.fileId)
     if (fileTableRef.value) {
-      const rowToUncheck = fileTableData.value.find(r => r.id === targetTab.fileId) || { id: targetTab.fileId }
+      const rowToUncheck = fileTableData.value.find(row => row.id === targetTab.fileId) || { id: targetTab.fileId }
       fileTableRef.value.toggleRowSelection(rowToUncheck, false)
     }
-    // Also remove from dialogSelectedRows to keep state fully in sync
-    dialogSelectedRows.value = dialogSelectedRows.value.filter(r => r.id !== targetTab.fileId)
   }
 
-  if (activeName === targetName) {
-    tbs.forEach((tab, index) => {
+  if (nextActiveName === targetName) {
+    currentTabs.forEach((tab, index) => {
       if (tab.name === targetName) {
-        const nextTab = tbs[index + 1] || tbs[index - 1]
+        const nextTab = currentTabs[index + 1] || currentTabs[index - 1]
         if (nextTab) {
-          activeName = nextTab.name
+          nextActiveName = nextTab.name
         }
       }
     })
   }
-  activeTabName.value = activeName
-  tabs.value = tbs.filter((tab) => tab.name !== targetName)
+
+  activeTabName.value = nextActiveName
+  tabs.value = currentTabs.filter(tab => tab.name !== targetName)
   updateGlobalFilters()
 }
 
+const applyGlobalFilters = () => {
+  if (tabs.value.length === 0) {
+    ElMessage.warning('目前没有任何文件可以提取')
+    return
+  }
+
+  tabs.value.forEach(tab => {
+    tab.filters = JSON.parse(JSON.stringify(globalFilters.value))
+    applyFilters(tab)
+  })
+  ElMessage.success(`已统一套用筛选条件至全部 ${tabs.value.length} 个文件`)
+}
+
 const applyFilters = (tabObj) => {
-  tabObj.currentPage = 1;
-  tabObj.hasFiltered = true;
-  fetchPageData(tabObj);
-  ElMessage.success('已应用新的阈值筛选条件，正在拉取大数据...');
+  tabObj.currentPage = 1
+  tabObj.hasFiltered = true
+  fetchPageData(tabObj)
+  ElMessage.success('已应用新的阈值筛选条件，正在拉取大数据...')
 }
 
 const clearFilters = (tabObj) => {
-  (tabObj.columns || []).forEach(col => {
+  ;(tabObj.columns || []).forEach(col => {
     tabObj.filters[col] = { min: '', max: '' }
   })
-  tabObj.hasFiltered = false;
-  tabObj.currentPage = 1;
-  fetchPageData(tabObj);
-  ElMessage.success('过滤条件已重置');
+  tabObj.hasFiltered = false
+  tabObj.currentPage = 1
+  fetchPageData(tabObj)
+  ElMessage.success('过滤条件已重置')
 }
 
 const exportToExcel = async (tabObj) => {
@@ -484,33 +473,33 @@ const exportToExcel = async (tabObj) => {
     ElMessage.warning('当前没有任何数据归档信息可以导出')
     return
   }
-  
+
   try {
     ElMessage.info('正在请求后端生成大数据过滤归档 Excel，这可能需要几十秒，请稍候...')
-    const filters = buildFiltersParam(tabObj)
-    const blob = await exportFilteredExcel(tabObj.fileId, { filters: filters })
+    const blob = await exportFilteredExcel(tabObj.fileId, { filters: buildFiltersParam(tabObj) })
     const url = window.URL.createObjectURL(new Blob([blob]))
     const link = document.createElement('a')
     link.style.display = 'none'
     link.href = url
-    link.setAttribute('download', tabObj.title + '_大数据归档报表.xlsx')
+    link.setAttribute('download', `${tabObj.title}_大数据归档报表.xlsx`)
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
     window.URL.revokeObjectURL(url)
-    
+
     ElMessage.success('大数据归档报表导出成功，浏览器即将开始下载')
-  } catch (err) {
-    console.error(err)
+  } catch (error) {
+    console.error(error)
     ElMessage.error('报表导出失败，请检查网络设置或查看后台日志')
   }
 }
 
 const handleExportCommand = async (command) => {
   if (tabs.value.length === 0) {
-    ElMessage.warning('没有可导出的数据文件！')
+    ElMessage.warning('没有可导出的数据文件')
     return
   }
+
   if (command === 'zip') {
     try {
       ElMessage.info('后端正流式组装并压缩导出数据，请耐心等待...')
@@ -528,14 +517,15 @@ const handleExportCommand = async (command) => {
       link.click()
       document.body.removeChild(link)
       window.URL.revokeObjectURL(url)
-      ElMessage.success('批量压缩包导出成功！')
-    } catch (err) {
-      console.error(err)
+      ElMessage.success('批量压缩包导出成功')
+    } catch (error) {
+      console.error(error)
       ElMessage.error('批量压缩导出失败，请重试')
     }
-  } else {
-    ElMessage.warning('为防止浏览器内存溢出，直接多Sheet导出已拦截，请选择【多文件压缩包 (.zip)】通过服务侧流式构建下载！')
+    return
   }
+
+  ElMessage.warning('为防止浏览器内存溢出，直接多 Sheet 导出已拦截，请选择多文件压缩包导出')
 }
 </script>
 
@@ -543,98 +533,168 @@ const handleExportCommand = async (command) => {
 .files-container {
   height: 100%;
 }
+
 .mb-20 {
   margin-bottom: 20px;
 }
+
 .action-card {
   border-radius: 12px;
   background: linear-gradient(145deg, #ffffff 0%, #f8fbfd 100%);
 }
+
 .action-title {
   font-size: 18px;
-  font-weight: bold;
+  font-weight: 700;
   color: #1f2d3d;
 }
+
 .action-desc {
+  margin-top: 5px;
   font-size: 13px;
   color: #909399;
-  margin-top: 5px;
 }
+
+.action-buttons-col {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.split-layout {
+  display: flex;
+  gap: 20px;
+}
+
+.tabs-card {
+  min-height: 500px;
+  flex: 1;
+  min-width: 0;
+}
+
 .empty-state {
   padding: 60px 0;
 }
+
 .filter-bar {
   display: flex;
   align-items: center;
 }
-.tabs-card {
-  border-radius: 12px;
+
+.filter-row {
+  width: 100%;
 }
+
+.filter-item-col {
+  margin-bottom: 12px;
+}
+
+.filter-actions-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  border-left: 1px solid #ebeef5;
+  padding-left: 20px;
+}
+
+.filter-actions {
+  margin-bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.filter-label-fixed {
+  width: 60px;
+}
+
+.range-input {
+  width: 120px;
+}
+
 .table-wrapper {
-  border-radius: 8px;
   overflow: hidden;
-  box-shadow: 0 2px 12px 0 rgba(0,0,0,0.05);
+  border-radius: 8px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.05);
 }
-.p-15 { padding: 15px 20px; }
-.mr-15 { margin-right: 15px; }
-.ml-15 { margin-left: 15px; }
+
+.pagination-container {
+  margin-top: 15px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.dialog-toolbar {
+  margin-bottom: 15px;
+  display: flex;
+  gap: 10px;
+}
+
+.dialog-search-input {
+  width: 250px;
+}
+
+.dialog-pagination {
+  margin-top: 15px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.p-15 {
+  padding: 15px 20px;
+}
+
 .bg-gray {
   background-color: #f8f9fc;
-  border-radius: 6px;
   border: 1px solid #ebeef5;
+  border-radius: 6px;
 }
+
 .flex-center {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 100%;
 }
+
 .filter-label {
   font-size: 14px;
-  font-weight: bold;
+  font-weight: 700;
   color: #606266;
   white-space: nowrap;
 }
+
 .separator {
-  margin: 0 8px;
+  margin: 0 10px;
   color: #909399;
 }
-.text-right {
-  text-align: right;
-  display: flex;
-  justify-content: flex-end;
-  align-items: center;
-}
+
 .count-tip {
   font-size: 13px;
-  color: #909399;
+  color: #606266;
 }
-.text-primary {
+
+.count-value {
+  font-size: 16px;
   color: #1890ff;
 }
+
 :deep(.el-input-group__prepend) {
   background-color: #fff;
 }
 
-<style scoped>
-.modern-header th {
-  background-color: var(--el-bg-color-page) !important;
-  color: var(--el-text-color-regular);
-  font-weight: 500;
-  border-bottom: 2px solid var(--el-border-color-lighter);
-}
-.modern-row td {
-  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-  letter-spacing: -0.5px;
-}
 .elegant-filters {
   border: 1px solid var(--el-border-color-light);
   border-radius: var(--spacing-2);
   background: var(--el-bg-color);
 }
+
 .elegant-filters :deep(.el-card__body) {
   padding: 16px 20px;
 }
+
 .filter-header {
   display: flex;
   justify-content: space-between;
@@ -643,16 +703,19 @@ const handleExportCommand = async (command) => {
   padding-bottom: 12px;
   border-bottom: 1px solid var(--el-border-color-lighter);
 }
+
 .filter-header .title {
   font-size: 15px;
   font-weight: 600;
   color: var(--el-text-color-primary);
 }
+
 .filter-grid {
   display: flex;
-  gap: 16px;
   flex-wrap: wrap;
+  gap: 16px;
 }
+
 .f-group {
   display: flex;
   align-items: center;
@@ -661,95 +724,104 @@ const handleExportCommand = async (command) => {
   border-radius: 6px;
   border: 1px solid var(--el-border-color-lighter);
 }
+
 .f-label {
+  min-width: 50px;
   padding: 0 10px;
   font-size: 13px;
   font-weight: 600;
   color: var(--el-color-primary);
-  min-width: 50px;
 }
+
 .f-input {
   width: 80px;
 }
+
 .f-input :deep(.el-input__wrapper) {
   box-shadow: none !important;
-  background: white;
+  background: #fff;
   border-radius: 4px;
 }
+
 .f-sep {
   margin: 0 8px;
   color: var(--el-text-color-placeholder);
 }
 
-.analysis-panel {
-  background: var(--el-bg-color);
-  border-radius: 8px;
-  border: 1px solid var(--el-border-color-light);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
+.button-icon {
+  margin-right: 5px;
 }
-.analysis-header {
-  background: var(--bg-gradient-blue);
-  color: white;
-  padding: 16px;
-}
-.analysis-header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 500;
-}
-.analysis-body {
-  padding: 16px;
-  background: var(--el-bg-color-page);
-}
-/* Right side enhancements */
-.result-card {
-  border: 1px solid var(--el-border-color-light) !important;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.02) !important;
-  transition: all 0.3s ease;
-  border-left: 3px solid var(--el-color-danger) !important;
-}
-.result-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.05) !important;
-}
-
-@media (max-width: 992px) {
-  .global-actions-col {
-    border-left: none !important;
-    padding-left: 0 !important;
-    margin-top: 15px;
-    justify-content: flex-start !important;
-  }
-}
-@media (max-width: 768px) {
-  .mb-xs { margin-bottom: 15px; }
-  .split-layout { flex-direction: column; }
-  .f-group { width: 100%; justify-content: space-between; }
-}
-
 
 .context-menu {
   margin: 0;
-  background: white;
-  z-index: 3000;
-  position: fixed;
-  list-style-type: none;
   padding: 5px 0;
-  border-radius: 4px;
-  font-size: 13px;
+  position: fixed;
+  z-index: 3000;
+  list-style-type: none;
+  background: #fff;
   color: #333;
-  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, .1);
+  font-size: 13px;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px 0 rgba(0, 0, 0, 0.1);
 }
+
 .context-menu li {
   margin: 0;
   padding: 7px 16px;
   cursor: pointer;
 }
+
 .context-menu li:hover {
   background: #f0f2f5;
-  color: #409EFF;
+  color: #409eff;
 }
 
+@media (max-width: 992px) {
+  .filter-actions-col {
+    align-items: flex-start;
+    border-left: none;
+    padding-left: 0;
+    margin-top: 15px;
+  }
+
+  .filter-actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .mb-xs {
+    margin-bottom: 15px;
+  }
+
+  .action-buttons-col,
+  .dialog-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .split-layout {
+    flex-direction: column;
+  }
+
+  .f-group {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .dialog-search-input,
+  .range-input {
+    width: 100%;
+  }
+
+  .filter-item-col .flex-center {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .filter-label-fixed {
+    width: 100%;
+  }
+}
 </style>
