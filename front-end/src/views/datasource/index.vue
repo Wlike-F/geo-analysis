@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="datasource-container">
     <el-card class="datasource-card" shadow="hover">
       <template #header>
@@ -28,7 +28,7 @@
               action="#"
               :show-file-list="false"
               :http-request="customUpload"
-              accept=".txt"
+              accept=".txt,.xlsx,.xls,.csv"
             >
               <el-button type="success" icon="Upload">上传测井文件</el-button>
             </el-upload>

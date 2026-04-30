@@ -12,34 +12,39 @@
           </div>
 
           <div class="custom-panel-body">
-            <el-form label-position="top" class="analysis-form">
-              <el-form-item class="custom-form-item">
-                <template #label>
-                  <span class="custom-label">数据源文件</span>
-                </template>
-                <el-select v-model="selectedFile" class="full-width custom-select" placeholder="请选择测井文件" @change="handleFileChange">
-                  <template #prefix>
-                    <el-icon><Document /></el-icon>
-                  </template>
-                  <el-option
-                    v-for="file in fileList"
-                    :key="file.id"
-                    :label="file.fileName"
-                    :value="file.id"
-                  />
-                </el-select>
-              </el-form-item>
+            <el-form label-position="top">
+              <div class="custom-section-title">
+                <el-icon><Document /></el-icon> 数据源文件
+              </div>
+              <div class="px-1 mt-2" style="margin-bottom: 14px;">
+                <div style="display: flex; width: 100%; gap: 8px;">
+                  <el-select v-model="selectedFile" placeholder="请选择测井文件" style="flex: 1; height: 30px;" @change="handleFileChange">
+                    <el-option
+                      v-for="file in fileList"
+                      :key="file.id"
+                      :label="file.fileName"
+                      :value="file.id"
+                    />
+                  </el-select>
+                  <el-button class="custom-btn-blue" @click="fetchFileList" title="刷新文件列表">
+                    <el-icon><Refresh /></el-icon> 刷新
+                  </el-button>
+                </div>
+              </div>
 
-              <el-form-item class="custom-form-item">
-                <template #label>
-                  <span class="custom-label">曲线显示通道 <span class="custom-label-sub">（最多选 3 个）</span></span>
-                </template>
+              <div class="custom-divider"></div>
+
+              <div class="custom-section-title custom-mt-3">
+                <el-icon><Connection /></el-icon> 曲线显示通道
+              </div>
+              <div class="px-1 mt-2" style="margin-bottom: 14px;">
                 <el-select
                   v-model="selectedChannels"
                   class="full-width custom-select-multi"
                   multiple
                   :multiple-limit="3"
                   placeholder="请选择绘图通道"
+                  style="min-height: 30px;"
                   @change="handleChannelChange"
                 >
                   <el-option
@@ -49,27 +54,29 @@
                     :value="col"
                   />
                 </el-select>
-              </el-form-item>
+              </div>
 
-              <div class="custom-section-title">
+              <div class="custom-divider"></div>
+
+              <div class="custom-section-title custom-mt-3">
                 <el-icon><Filter /></el-icon> 异常识别条件
               </div>
               <section class="anomaly-controls">
                 <div v-for="(cond, idx) in anomalyConditions" :key="idx" class="condition-item">
                   <el-row :gutter="8" class="condition-row" align="middle">
                     <el-col :span="8">
-                      <el-select v-model="cond.channel" class="full-width custom-select-sm" placeholder="通道">
+                      <el-select v-model="cond.channel" class="full-width custom-select-sm" placeholder="通道" style="height: 30px;">
                         <el-option v-for="col in availableChannels" :key="col" :label="col" :value="col" />
                       </el-select>
                     </el-col>
                     <el-col :span="7">
-                      <el-select v-model="cond.operator" class="full-width custom-select-sm" placeholder="条件">
+                      <el-select v-model="cond.operator" class="full-width custom-select-sm" placeholder="条件" style="height: 30px;">
                         <el-option label="大于 (>)" value=">" />
                         <el-option label="小于 (<)" value="<" />
                       </el-select>
                     </el-col>
                     <el-col :span="6">
-                      <el-input-number v-model="cond.threshold" class="full-width custom-input-number" :controls="false" placeholder="阈值" />
+                      <el-input-number v-model="cond.threshold" class="full-width custom-input-number" :controls="false" placeholder="阈值" style="height: 30px;" />
                     </el-col>
                     <el-col :span="3" class="condition-delete-col">
                       <el-button
@@ -78,7 +85,6 @@
                         icon="Delete"
                         plain
                         circle
-                        size="small"
                         class="custom-delete-btn"
                         @click="removeCondition(idx)"
                       />
@@ -98,9 +104,8 @@
                     v-model="minContinuousPoints"
                     :min="1"
                     :max="1000"
-                    size="small"
                     class="full-width"
-                    style="width: 100%;"
+                    style="width: 100%; height: 30px;"
                   />
                 </div>
               </section>
@@ -220,11 +225,11 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
+import { ref, onMounted, nextTick, shallowRef, onBeforeUnmount, onActivated, computed } from 'vue'
 import * as echarts from 'echarts'
+import { Setting, MagicStick, Download, DataAnalysis, Plus, List, Delete, Refresh, Filter, Odometer, Picture, Document, Connection } from '@element-plus/icons-vue'
+import { getFileList, getEchartsData } from '@/api/file'
 import { ElMessage } from 'element-plus'
-import { DataAnalysis, Delete, Download, List, MagicStick, Plus, Setting, Picture, Document, Filter, Odometer } from '@element-plus/icons-vue'
-import { getEchartsData, getFileList } from '@/api/file'
 
 const fileList = ref([])
 const selectedFile = ref(null)
@@ -261,25 +266,33 @@ const ensureChartInstance = () => {
   return true
 }
 
+// 获文件列表
 const fetchFileList = async () => {
   try {
     const data = await getFileList()
-    if (Array.isArray(data)) {
+    if (data && Array.isArray(data)) {
       fileList.value = data
       if (fileList.value.length > 0) {
-        selectedFile.value = fileList.value[0].id
-        handleFileChange()
+        // 如果当前选中的文件依旧在列表中，则保留选中状态，以免刷新时重置用户的操作
+        const isSelectedFileExists = fileList.value.some(f => f.id === selectedFile.value)
+        if (!selectedFile.value || !isSelectedFileExists) {
+          selectedFile.value = fileList.value[0].id
+          handleFileChange()
+        }
+      } else {
+        selectedFile.value = null
       }
+      if (!chartInstance.value) initChart()
+    } else {
+      if (!chartInstance.value) initChart()
     }
   } catch (error) {
     ElMessage.error('无法连接后端获取文件列表')
-  } finally {
-    nextTick(() => {
-      initChart()
-    })
+    if (!chartInstance.value) initChart()
   }
 }
 
+// 切换文件，重置绘图
 const handleFileChange = () => {
   rawChartData.value = {}
   availableChannels.value = []
@@ -670,6 +683,10 @@ onMounted(() => {
   window.addEventListener('resize', handleResize)
 })
 
+onActivated(() => {
+  fetchFileList()
+})
+
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
   if (chartInstance.value) {
@@ -806,6 +823,13 @@ onBeforeUnmount(() => {
 .custom-select-multi .el-select__tags {
   font-size: 0.875rem;
 }
+/* Ensure el-select and el-input-number respect the 30px height */
+:deep(.el-select .el-input__wrapper),
+:deep(.el-input-number .el-input__wrapper) {
+  height: 30px;
+  min-height: 30px;
+  line-height: 30px;
+}
 .custom-select-sm .el-input__wrapper {
   padding: 0 0.5rem;
 }
@@ -818,7 +842,7 @@ onBeforeUnmount(() => {
 .custom-add-btn {
   width: 100%;
   margin-top: 0.25rem;
-  padding: 0.5rem 0;
+  padding: 0;
   border: 1px dashed #d1d5db;
   border-radius: 0.5rem;
   font-size: 0.875rem;
@@ -829,7 +853,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: center;
   gap: 0.25rem;
-  height: auto;
+  height: 30px;
 }
 .custom-add-btn:hover {
   background-color: #eff6ff;
@@ -838,6 +862,11 @@ onBeforeUnmount(() => {
 }
 .custom-delete-btn {
   margin: 0;
+  height: 30px !important;
+  width: 30px !important;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .custom-divider {
   border-top: 1px solid #f3f4f6;
@@ -917,6 +946,28 @@ onBeforeUnmount(() => {
   border-color: #a7f3d0;
 }
 .custom-btn-emerald.is-disabled {
+  opacity: 0.5;
+}
+.custom-btn-blue {
+  background-color: #eff6ff;
+  color: #2563eb;
+  border: 1px solid #bfdbfe;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0 1rem;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+.custom-btn-blue:hover, .custom-btn-blue:focus {
+  background-color: #dbeafe;
+  color: #1d4ed8;
+  border-color: #93c5fd;
+}
+.custom-btn-blue.is-disabled {
   opacity: 0.5;
 }
 .custom-btn-indigo {
