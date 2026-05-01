@@ -299,6 +299,10 @@ const fetchInstructions = async () => {
 function normalizeInstruction(item, index) {
   const plainText = htmlToText(item.content || item.summary || '')
   const title = (item.title || `说明 ${index + 1}`).trim()
+  if (isLegacyAiExtractionInstruction(title, plainText)) {
+    return buildVisualizationInstruction(item, index)
+  }
+
   const steps = normalizeSteps(item.steps, plainText, title)
   const summary = (item.summary || buildSummary(plainText, title)).trim()
   const note = (item.note || extractNote(plainText)).trim()
@@ -316,6 +320,37 @@ function normalizeInstruction(item, index) {
     links,
     anchorId: `instruction-${item.id ?? index}`,
     searchText: `${title} ${summary} ${steps.join(' ')} ${note} ${plainText}`.toLowerCase()
+  }
+}
+
+function isLegacyAiExtractionInstruction(title, plainText) {
+  const source = `${title} ${plainText}`
+  return /AI智能提取|AI 智能提取|通义千问|自然语言筛选/.test(source)
+}
+
+function buildVisualizationInstruction(item, index) {
+  const title = '提示 2：异常测段可视化'
+  const summary = '在异常测段可视化页面选择测井文件、显示通道、统计通道和异常识别条件，生成多道曲线与异常测段高亮结果。'
+  const steps = [
+    '进入“异常测段可视化”页面并选择目标测井文件。',
+    '选择需要展示的曲线通道，以及参与极值、均值统计的特征通道。',
+    '配置异常识别条件和最短连续测点数，点击执行分析与渲染。',
+    '在图表中核对异常段高亮区域，必要时查看明细或导出 CSV 结果。'
+  ]
+  const note = '异常测段可视化只用于分析展示与结果导出，不会修改原始解析数据。'
+  const links = [{ label: '去异常测段可视化', path: '/visualization' }]
+
+  return {
+    id: item.id ?? `local-${index + 1}`,
+    icon: item.icon || 'Lightbulb',
+    title,
+    summary,
+    steps,
+    note,
+    category: normalizeCategory(item.category, title, summary),
+    links,
+    anchorId: `instruction-${item.id ?? index}`,
+    searchText: `${title} ${summary} ${steps.join(' ')} ${note}`.toLowerCase()
   }
 }
 
@@ -441,7 +476,9 @@ function normalizeLinks(links, category, sourceText) {
   if (/导出|看板|测井|报表/.test(sourceText)) {
     candidateLinks.push({ label: '去测井数据看板', path: '/files' })
   }
-  if (/异常|提取/.test(sourceText)) {
+  if (/异常.*可视化|可视化.*异常|图表|渲染/.test(sourceText)) {
+    candidateLinks.push({ label: '去异常测段可视化', path: '/visualization' })
+  } else if (/异常|提取/.test(sourceText)) {
     candidateLinks.push({ label: '去异常测段提取', path: '/extract' })
   }
   if (/字典|映射/.test(sourceText)) {

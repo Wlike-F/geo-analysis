@@ -125,10 +125,10 @@ CREATE TABLE IF NOT EXISTS sys_instruction (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='系统使用说明表';
 
 INSERT INTO sys_instruction (title, icon, content, sort_order) VALUES
-('系统概览与核心能力', 'PriceTag', '本系统提供专业的地层分析、多通道并发比对、AI智能提取等功能。目前处于稳定运行状态。', 1),
+('系统概览与核心能力', 'PriceTag', '本系统提供专业的地层分析、多通道并发比对、异常测段可视化等功能。目前处于稳定运行状态。', 1),
 ('测井数据看板使用提示', 'Lock', '在看板中您可以直观地浏览已上传的测井TXT文件数据，并可以通过顶部操作栏执行批量分析。', 2),
 ('提示 1：极速并发加载', 'Lightbulb', '当加载超过百万行的TXT文件时，系统会在后台起用流式多线程处理，界面会有短暂锁定期，请耐心等待。<br><img src="" alt="占位图片">', 3),
-('提示 2：AI智能提取', 'Lightbulb', '由于调用了阿里云通义千问大模型，自然语言筛选请尽量包含具体的数值条件，例如：深度大于1500，且温度介于50-80之间。<br><img src="" alt="占位图片">', 4),
+('提示 2：异常测段可视化', 'Lightbulb', '在异常测段可视化页面选择目标测井文件、显示通道、统计通道和异常识别条件，系统会生成多道曲线与异常测段高亮结果。异常测段可视化只用于分析展示与结果导出，不会修改原始解析数据。', 4),
 ('常见问题与解答', 'DocumentCopy', '<p><strong>Q：导出Excel失败怎么办？</strong></p><p>A：检查是否超出了Excel单表104万行的限制，如有需要请使用CSV格式。</p>', 5);
 -- 4. 系统列名映射字典表 (动态解析归一化引擎)
 CREATE TABLE IF NOT EXISTS `sys_column_mapping` (

@@ -60,8 +60,9 @@
               <el-tag v-else type="info">未知</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="200" fixed="right" align="center">
+          <el-table-column label="操作" width="300" fixed="right" align="center">
             <template #default="{ row }">
+              <el-button size="small" type="success" link icon="DocumentChecked" :disabled="row.status !== 1" @click="handleParseReport(row)">文件解析报告</el-button>
               <el-button size="small" type="primary" link icon="View" :disabled="row.status !== 1" @click="handlePreview(row)">预览</el-button>
               <el-button size="small" type="danger" link icon="Delete" :disabled="row.status === 0" @click="handleDelete(row)">删除</el-button>
             </template>
@@ -109,6 +110,65 @@
           show-overflow-tooltip
         />
       </el-table>
+    </el-dialog>
+
+    <el-dialog v-model="parseReportVisible" title="文件解析报告" width="760px" top="7vh">
+      <div v-loading="parseReportLoading" class="parse-report">
+        <template v-if="parseReport">
+          <div class="report-summary">
+            <div class="summary-item">
+              <span class="summary-label">文件名称</span>
+              <strong>{{ parseReport.fileName || '-' }}</strong>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">解析行数</span>
+              <strong>{{ formatNumber(parseReport.totalRows) }} 行</strong>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">识别字段</span>
+              <strong>{{ formatNumber(parseReport.columnCount) }} 个</strong>
+            </div>
+            <div class="summary-item">
+              <span class="summary-label">深度范围</span>
+              <strong>{{ formatRange(parseReport.depthMin, parseReport.depthMax, 'm') }}</strong>
+            </div>
+          </div>
+
+          <el-descriptions :column="2" border class="report-descriptions">
+            <el-descriptions-item label="缺失/无效值数量">{{ formatNumber(parseReport.invalidValueCount) }} 个</el-descriptions-item>
+            <el-descriptions-item label="隔离脏数据行">{{ formatNumber(parseReport.dirtyLineCount) }} 行</el-descriptions-item>
+            <el-descriptions-item label="数据库记录数">{{ formatNumber(parseReport.recordCount) }} 行</el-descriptions-item>
+            <el-descriptions-item label="解析状态">
+              <el-tag :type="parseReport.status === 1 ? 'success' : 'info'">{{ parseReport.status === 1 ? '可用' : '非可用' }}</el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+          <el-alert
+            class="report-note"
+            type="info"
+            show-icon
+            :closable="false"
+            title="缺失/无效值指空值、非数字值、NaN、null，以及 -9999、-999.25、-999 等占位无效值；井号仅作为标识字段展示，不参与缺失/无效统计。"
+          />
+
+          <div class="report-section-title">识别字段</div>
+          <div class="column-tags">
+            <el-tag v-for="col in parseReport.columns" :key="col" effect="plain">{{ col }}</el-tag>
+          </div>
+
+          <div class="report-section-title">关键列范围</div>
+          <el-table :data="parseReport.columnStats || []" border stripe max-height="320">
+            <el-table-column prop="column" label="字段" min-width="130" show-overflow-tooltip />
+            <el-table-column prop="validCount" label="有效值" width="100" align="center" />
+            <el-table-column prop="invalidCount" label="无效/缺失" width="110" align="center" />
+            <el-table-column label="最小值" min-width="120" align="center">
+              <template #default="{ row }">{{ formatReportValue(row.min) }}</template>
+            </el-table-column>
+            <el-table-column label="最大值" min-width="120" align="center">
+              <template #default="{ row }">{{ formatReportValue(row.max) }}</template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </div>
     </el-dialog>
 
     <el-dialog v-model="sandboxVisible" title="数据预览与列映射沙盒" width="80%" top="5vh">
@@ -183,9 +243,9 @@
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { clearFiles, deleteFile } from '@/api/file'
+import { clearFiles, deleteFile, getFileParseReport } from '@/api/file'
 import { getAllColumnMappings, addColumnMapping } from '@/api/columnMapping'
-import { Delete, FolderOpened, Loading, Plus, Search, Upload, View } from '@element-plus/icons-vue'
+import { Delete, DocumentChecked, FolderOpened, Loading, Plus, Search, Upload, View } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -218,6 +278,10 @@ const previewDialogVisible = ref(false)
 const previewLoading = ref(false)
 const previewTableData = ref([])
 const previewColumns = ref([])
+
+const parseReportVisible = ref(false)
+const parseReportLoading = ref(false)
+const parseReport = ref(null)
 
 const addDictDialogVisible = ref(false)
 const addDictLoading = ref(false)
@@ -336,6 +400,23 @@ const formatColumns = (jsonStr) => {
   }
 }
 
+const formatNumber = (value) => {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue.toLocaleString() : '0'
+}
+
+const formatReportValue = (value) => {
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? Number(numberValue.toFixed(4)).toString() : '-'
+}
+
+const formatRange = (min, max, unit = '') => {
+  const minText = formatReportValue(min)
+  const maxText = formatReportValue(max)
+  if (minText === '-' || maxText === '-') return '-'
+  return `${minText} - ${maxText}${unit ? ` ${unit}` : ''}`
+}
+
 const customUpload = async (options) => {
   const formData = new FormData()
   formData.append('file', options.file)
@@ -392,6 +473,19 @@ const confirmScan = async () => {
     ElMessage.error(error.message || '扫描失败')
   } finally {
     scanning.value = false
+  }
+}
+
+const handleParseReport = async (row) => {
+  parseReportVisible.value = true
+  parseReportLoading.value = true
+  parseReport.value = null
+  try {
+    parseReport.value = await getFileParseReport(row.id)
+  } catch (error) {
+    ElMessage.error(error.message || '获取文件解析报告失败')
+  } finally {
+    parseReportLoading.value = false
   }
 }
 
@@ -560,6 +654,61 @@ onUnmounted(() => {
   width: 100%;
 }
 
+.parse-report {
+  min-height: 220px;
+}
+
+.report-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.summary-item {
+  padding: 12px;
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  background: var(--el-bg-color-page);
+}
+
+.summary-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.summary-item strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  color: var(--el-text-color-primary);
+}
+
+.report-descriptions {
+  margin-bottom: 16px;
+}
+
+.report-note {
+  margin-bottom: 16px;
+}
+
+.report-section-title {
+  margin: 16px 0 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.column-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 @media (max-width: 992px) {
   .page-header {
     flex-direction: column;
@@ -579,6 +728,10 @@ onUnmounted(() => {
 
   .search-input {
     width: 100%;
+  }
+
+  .report-summary {
+    grid-template-columns: 1fr;
   }
 }
 </style>

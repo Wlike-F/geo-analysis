@@ -69,6 +69,13 @@ export function getFilePage(params) {
   })
 }
 
+export function getFileParseReport(id) {
+  return request({
+    url: `/file/${id}/parse-report`,
+    method: 'get'
+  })
+}
+
 export function exportBatchExcelZip(data) {
   return request({
     url: '/file/export-batch-zip',

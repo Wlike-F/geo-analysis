@@ -8,6 +8,7 @@ import com.xy.welllog.dto.WellLogDataDTO;
 import com.xy.welllog.dto.WellLogFileDTO;
 import com.xy.welllog.dto.PreviewResultDTO;
 import com.xy.welllog.dto.ConfirmUploadDTO;
+import com.xy.welllog.entity.LogDataRecord;
 import com.xy.welllog.entity.LogFileInfo;
 import com.xy.welllog.entity.SysUser;
 import com.xy.welllog.service.*;
@@ -16,9 +17,11 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.util.StringUtils;
 
+import java.math.BigDecimal;
 import java.util.*;
 
 import org.springframework.web.context.request.RequestContextHolder;
@@ -47,6 +50,7 @@ public class FileController {
     private final JwtUtils jwtUtils;
     private final SysColumnMappingService mappingService;
     private final LogFileParseService logFileParseService;
+    private final JdbcTemplate jdbcTemplate;
 
     private static final String UPLOAD_DIR = "E:\\Others\\upload"; // 主目录
     private static final String UPLOAD_DIR_TO = "C:\\project-upload"; // 备用目录
@@ -300,6 +304,164 @@ public class FileController {
         if (StringUtils.hasText(fileName)) wrapper.like(LogFileInfo::getFileName, fileName);
         wrapper.orderByDesc(LogFileInfo::getCreateTime);
         return Result.success(fileInfoService.page(page, wrapper));
+    }
+
+    @GetMapping("/{id}/parse-report")
+    public Result<Map<String, Object>> getParseReport(@PathVariable Long id, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        LogFileInfo fileInfo = fileInfoService.getById(id);
+        if (fileInfo == null || !fileInfo.getUserId().equals(userId)) {
+            return Result.failed("文件不存在或无权查看");
+        }
+
+        List<String> columns = new ArrayList<>();
+        if (StringUtils.hasText(fileInfo.getColumnsJson())) {
+            columns = cn.hutool.json.JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
+        }
+
+        LambdaQueryWrapper<LogDataRecord> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(LogDataRecord::getFileId, id);
+        List<LogDataRecord> records = dataRecordService.list(wrapper);
+
+        Map<String, ColumnReport> statsMap = new LinkedHashMap<>();
+        for (String col : columns) {
+            if (isWellNameColumn(col)) {
+                continue;
+            }
+            statsMap.put(col, new ColumnReport(col));
+        }
+
+        int invalidValueCount = 0;
+        Double depthMin = null;
+        Double depthMax = null;
+
+        for (LogDataRecord record : records) {
+            for (String col : columns) {
+                if (isWellNameColumn(col)) {
+                    continue;
+                }
+                ColumnReport report = statsMap.get(col);
+                Object value = readRecordValue(record, col);
+                Double numericValue = toValidReportNumber(value);
+                if (numericValue == null) {
+                    report.invalidCount++;
+                    invalidValueCount++;
+                    continue;
+                }
+
+                report.validCount++;
+                report.min = report.min == null ? numericValue : Math.min(report.min, numericValue);
+                report.max = report.max == null ? numericValue : Math.max(report.max, numericValue);
+
+                if (isDepthColumn(col)) {
+                    depthMin = depthMin == null ? numericValue : Math.min(depthMin, numericValue);
+                    depthMax = depthMax == null ? numericValue : Math.max(depthMax, numericValue);
+                }
+            }
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("fileId", fileInfo.getId());
+        result.put("fileName", fileInfo.getFileName());
+        result.put("status", fileInfo.getStatus());
+        result.put("totalRows", fileInfo.getTotalRows());
+        result.put("recordCount", records.size());
+        result.put("columns", columns);
+        result.put("columnCount", columns.size());
+        result.put("depthMin", depthMin);
+        result.put("depthMax", depthMax);
+        result.put("invalidValueCount", invalidValueCount);
+        result.put("dirtyLineCount", countDirtyLines(id));
+        result.put("columnStats", new ArrayList<>(statsMap.values()));
+
+        return Result.success(result);
+    }
+
+    private Object readRecordValue(LogDataRecord record, String colName) {
+        String colLower = colName == null ? "" : colName.trim().toLowerCase();
+        if (isDepthColumn(colName)) return record.getDepth();
+        return switch (colLower) {
+            case "ac" -> record.getAc();
+            case "den" -> record.getDen();
+            case "gr" -> record.getGr();
+            case "sp" -> record.getSp();
+            case "rt" -> record.getRt();
+            default -> readExtraValue(record.getExtraJson(), colName);
+        };
+    }
+
+    private Object readExtraValue(Map<String, Object> extra, String colName) {
+        if (extra == null || colName == null) return null;
+        Object value = extra.get(colName);
+        if (value != null) return value;
+        String upper = colName.toUpperCase();
+        value = extra.get(upper);
+        if (value != null) return value;
+        String lower = colName.toLowerCase();
+        value = extra.get(lower);
+        if (value != null) return value;
+        for (Map.Entry<String, Object> entry : extra.entrySet()) {
+            if (entry.getKey() != null && entry.getKey().trim().equalsIgnoreCase(colName.trim())) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    private boolean isDepthColumn(String colName) {
+        if (colName == null) return false;
+        String colLower = colName.trim().toLowerCase();
+        return colLower.equals("depth") || colLower.contains("tvd") || colLower.contains("dep") || colLower.contains("深");
+    }
+
+    private boolean isWellNameColumn(String colName) {
+        if (colName == null) return false;
+        String normalized = colName.trim().toLowerCase();
+        return normalized.equals("井号")
+                || normalized.equals("岩性")
+                || normalized.equals("well")
+                || normalized.equals("well_name")
+                || normalized.equals("wellname")
+                || normalized.equals("well no")
+                || normalized.equals("well_no");
+    }
+
+    private Double toValidReportNumber(Object value) {
+        if (value == null) return null;
+        if (value instanceof BigDecimal decimal) return isInvalidSentinel(decimal.doubleValue()) ? null : decimal.doubleValue();
+        String text = String.valueOf(value).trim();
+        if (!StringUtils.hasText(text) || "nan".equalsIgnoreCase(text) || "null".equalsIgnoreCase(text)) return null;
+        try {
+            double number = Double.parseDouble(text);
+            return isInvalidSentinel(number) ? null : number;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private boolean isInvalidSentinel(double value) {
+        return !Double.isFinite(value)
+                || Math.abs(value + 9999d) < 0.0000001d
+                || Math.abs(value + 999.25d) < 0.0000001d
+                || Math.abs(value + 999d) < 0.0000001d;
+    }
+
+    private long countDirtyLines(Long fileId) {
+        try {
+            Long count = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM log_dirty_data WHERE file_id = ?", Long.class, fileId);
+            return count == null ? 0L : count;
+        } catch (Exception e) {
+            return 0L;
+        }
+    }
+
+    @lombok.Data
+    private static class ColumnReport {
+        private final String column;
+        private long validCount;
+        private long invalidCount;
+        private Double min;
+        private Double max;
     }
 
     @DeleteMapping("/clear")

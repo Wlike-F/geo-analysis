@@ -59,6 +59,28 @@
               <div class="custom-divider"></div>
 
               <div class="custom-section-title custom-mt-3">
+                <el-icon><DataAnalysis /></el-icon> 统计与特征通道
+              </div>
+              <div class="px-1 mt-2" style="margin-bottom: 14px;">
+                <el-select
+                  v-model="selectedStatsChannels"
+                  class="full-width custom-select-multi"
+                  multiple
+                  placeholder="请选择要统计极值、均值的通道"
+                  style="min-height: 30px;"
+                >
+                  <el-option
+                    v-for="col in availableChannels"
+                    :key="col"
+                    :label="col"
+                    :value="col"
+                  />
+                </el-select>
+              </div>
+
+              <div class="custom-divider"></div>
+
+              <div class="custom-section-title custom-mt-3">
                 <el-icon><Filter /></el-icon> 异常识别条件
               </div>
               <section class="anomaly-controls">
@@ -210,11 +232,13 @@
         <el-table-column prop="endDepth" label="底界深度(m)" align="center" />
         <el-table-column label="厚度(m)" align="center">
           <template #default="scope">
-            <el-tag type="success">{{ (scope.row.endDepth - scope.row.startDepth).toFixed(2) }}</el-tag>
+            <el-tag type="success">{{ (scope.row.endDepth - scope.row.startDepth).toFixed(3) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="maxVal" label="主特征极大值" align="center" />
-        <el-table-column prop="avgVal" label="主特征平均值" align="center" />
+        <template v-for="col in selectedStatsChannels" :key="col">
+          <el-table-column :prop="`stats_${col}_ext`" :label="`[${col}] 极值`" align="center" />
+          <el-table-column :prop="`stats_${col}_avg`" :label="`[${col}] 均值`" align="center" />
+        </template>
       </el-table>
 
       <template #footer>
@@ -238,6 +262,7 @@ const maxDepth = ref(3000)
 const depthRange = ref([0, 3000])
 const availableChannels = ref([])
 const selectedChannels = ref([])
+const selectedStatsChannels = ref([])
 const anomalyConditions = ref([{ channel: '', operator: '>', threshold: 0 }])
 const minContinuousPoints = ref(1)
 const anomalySegments = ref([])
@@ -308,6 +333,7 @@ const handleFileChange = () => {
       if (availableChannels.value.length > 0) {
         selectedChannels.value = availableChannels.value.slice(0, 3)
         anomalyConditions.value[0].channel = selectedChannels.value[0]
+        selectedStatsChannels.value = [...selectedChannels.value]
       }
     } catch (error) {
       console.error(error)
@@ -338,6 +364,43 @@ const removeCondition = (idx) => {
   anomalyConditions.value.splice(idx, 1)
 }
 
+const invalidNumericSentinels = [-9999, -999.25, -999]
+
+const parseFiniteNumber = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  const numberValue = Number(value)
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+const isValidStatsNumber = (value) => {
+  const numberValue = parseFiniteNumber(value)
+  if (numberValue === null) return false
+  return !invalidNumericSentinels.some(sentinel => Math.abs(numberValue - sentinel) < 1e-8)
+}
+
+const addStatsValue = (segment, statsItem, value) => {
+  if (!isValidStatsNumber(value)) return
+  const numberValue = Number(value)
+  const countKey = `stats_${statsItem.col}_count`
+  const sumKey = `stats_${statsItem.col}_sum`
+  const maxKey = `stats_${statsItem.col}_max`
+  const minKey = `stats_${statsItem.col}_min`
+
+  segment[countKey] = (segment[countKey] || 0) + 1
+  segment[sumKey] = (segment[sumKey] || 0) + numberValue
+  segment[maxKey] = segment[maxKey] === undefined ? numberValue : Math.max(segment[maxKey], numberValue)
+  segment[minKey] = segment[minKey] === undefined ? numberValue : Math.min(segment[minKey], numberValue)
+}
+
+const finalizeStats = (segment, statsData) => {
+  statsData.forEach(s => {
+    const count = segment[`stats_${s.col}_count`] || 0
+    const extVal = s.op === '<' ? segment[`stats_${s.col}_min`] : segment[`stats_${s.col}_max`]
+    segment[`stats_${s.col}_ext`] = count > 0 && Number.isFinite(extVal) ? extVal.toFixed(2) : '-'
+    segment[`stats_${s.col}_avg`] = count > 0 ? (segment[`stats_${s.col}_sum`] / count).toFixed(2) : '-'
+  })
+}
+
 const updateDepthZoom = () => {
   if (chartInstance.value && rawChartData.value.DEPTH?.length > 0) {
     chartInstance.value.dispatchAction({
@@ -363,12 +426,20 @@ const extractAnomalySegments = () => {
     }
   }).filter(item => item && item.dataArr)
 
+  const statsData = selectedStatsChannels.value.map(col => {
+    const targetKey = Object.keys(rawChartData.value).find(key => key.toUpperCase() === col.toUpperCase())
+    const cond = anomalyConditions.value.find(c => c.channel === col)
+    return {
+      col,
+      arr: targetKey ? rawChartData.value[targetKey] : null,
+      op: cond ? cond.operator : '>'
+    }
+  }).filter(item => item && item.arr)
+
   if (conditionsData.length === 0) return
 
   let isAnomaly = false
   let currentSegment = null
-  let maxVal = -Infinity
-  let sumVal = 0
   let countVal = 0
 
   for (let i = 0; i < depths.length; i += 1) {
@@ -377,18 +448,16 @@ const extractAnomalySegments = () => {
 
     const inRange = depth >= depthRange.value[0] && depth <= depthRange.value[1]
     let meetsAllConditions = inRange
-    let primaryVal = 0
 
     if (inRange) {
       for (let j = 0; j < conditionsData.length; j += 1) {
         const cond = conditionsData[j]
-        const value = parseFloat(cond.dataArr[i])
-        if (Number.isNaN(value)) {
+        const value = parseFiniteNumber(cond.dataArr[i])
+        if (value === null) {
           meetsAllConditions = false
           break
         }
 
-        if (j === 0) primaryVal = value
         if (cond.operator === '>' ? !(value > cond.threshold) : !(value < cond.threshold)) {
           meetsAllConditions = false
           break
@@ -400,33 +469,34 @@ const extractAnomalySegments = () => {
       if (!isAnomaly) {
         isAnomaly = true
         currentSegment = { startDepth: depth, endDepth: depth }
-        maxVal = primaryVal
-        sumVal = primaryVal
         countVal = 1
+        statsData.forEach(s => {
+          addStatsValue(currentSegment, s, s.arr[i])
+        })
       } else {
-        if (primaryVal > maxVal) maxVal = primaryVal
-        sumVal += primaryVal
         countVal += 1
+        statsData.forEach(s => {
+          addStatsValue(currentSegment, s, s.arr[i])
+        })
       }
     } else if (isAnomaly) {
-      if (countVal >= minContinuousPoints.value) {
-        currentSegment.endDepth = depths[i - 1 < 0 ? 0 : i - 1]
-        currentSegment.maxVal = maxVal.toFixed(2)
-        currentSegment.avgVal = (sumVal / countVal).toFixed(2)
+      currentSegment.endDepth = parseFloat(depths[i - 1 < 0 ? 0 : i - 1])
+      if (countVal >= minContinuousPoints.value && (minContinuousPoints.value === 1 || Math.abs(currentSegment.endDepth - currentSegment.startDepth) > 0)) {
+        finalizeStats(currentSegment, statsData)
         anomalySegments.value.push(currentSegment)
       }
       isAnomaly = false
     }
   }
 
-  if (isAnomaly && countVal >= minContinuousPoints.value) {
-    currentSegment.endDepth = depths[depths.length - 1]
-    currentSegment.maxVal = maxVal.toFixed(2)
-    currentSegment.avgVal = (sumVal / countVal).toFixed(2)
-    anomalySegments.value.push(currentSegment)
+  if (isAnomaly) {
+    currentSegment.endDepth = parseFloat(depths[depths.length - 1])
+    if (countVal >= minContinuousPoints.value && (minContinuousPoints.value === 1 || Math.abs(currentSegment.endDepth - currentSegment.startDepth) > 0)) {
+      finalizeStats(currentSegment, statsData)
+      anomalySegments.value.push(currentSegment)
+    }
   }
 }
-
 const handleDraw = async () => {
   if (!selectedFile.value) {
     ElMessage.warning('请先选择测井文件')
@@ -477,10 +547,19 @@ const exportAnomalyData = () => {
     return
   }
 
-  let csvContent = '\uFEFF序号,顶界深度(m),底界深度(m),厚度(m),主特征极值,主特征均值\n'
+  let csvContent = '\uFEFF序号,顶界深度(m),底界深度(m),厚度(m)'
+  selectedStatsChannels.value.forEach(col => {
+    csvContent += `,${col}极值,${col}均值`
+  })
+  csvContent += '\n'
+
   anomalySegments.value.forEach((row, idx) => {
-    const thickness = (row.endDepth - row.startDepth).toFixed(2)
-    csvContent += `${idx + 1},${row.startDepth},${row.endDepth},${thickness},${row.maxVal},${row.avgVal}\n`
+    const thickness = (row.endDepth - row.startDepth).toFixed(3)
+    let line = `${idx + 1},${row.startDepth},${row.endDepth},${thickness}`
+    selectedStatsChannels.value.forEach(col => {
+      line += `,${row[`stats_${col}_ext`] || '-'},${row[`stats_${col}_avg`] || '-'}`
+    })
+    csvContent += line + '\n'
   })
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
