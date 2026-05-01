@@ -112,7 +112,11 @@
                   :label="col"
                   min-width="140"
                   align="center"
-                />
+                >
+                  <template #default="{ row }">
+                    {{ getDisplayValue(row, col) }}
+                  </template>
+                </el-table-column>
               </el-table>
             </div>
 
@@ -192,6 +196,29 @@ import { exportBatchZipStream, exportFilteredExcel, getFileList, getFilePage, ge
 const activeTabName = ref('')
 const tabs = ref([])
 const fileList = ref([])
+
+const getDisplayValue = (row, col) => {
+  if (!row) return '-'
+  
+  // 1. 直取
+  if (row[col] !== undefined && row[col] !== null && row[col] !== '') {
+    return row[col]
+  }
+
+  // 2. 修剪空格及忽略大小写匹配
+  const normalizedCol = String(col).trim().toLowerCase()
+  const matchKey = Object.keys(row).find(k => String(k).trim().toLowerCase() === normalizedCol)
+  if (matchKey && row[matchKey] !== undefined && row[matchKey] !== null && row[matchKey] !== '') {
+    return row[matchKey]
+  }
+  
+  // 3. 防止强等于带来 0 的丢失
+  if (row[col] === 0 || (matchKey && row[matchKey] === 0)) {
+    return 0
+  }
+
+  return '-'
+}
 const selectedFiles = ref([])
 const fileDialogVisible = ref(false)
 const fileTableData = ref([])

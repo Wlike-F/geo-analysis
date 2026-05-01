@@ -131,10 +131,21 @@
                 :label="`${mapCol.standardName} (${mapCol.chineseMeaning})`"
                 :value="mapCol.standardName"
               />
+              <template #footer>
+                <el-button 
+                  text 
+                  type="primary" 
+                  icon="Plus" 
+                  class="full-width" 
+                  @click="openAddDictDialog(index, header)"
+                >
+                  添加新的标准字段
+                </el-button>
+              </template>
             </el-select>
           </template>
           <template #default="scope">
-            {{ scope.row[previewSummary.originalSuggestedMapping[index]] || scope.row[header] || scope.row[`ExtraCol${index + 1}`] }}
+            {{ scope.row[previewSummary.originalSuggestedMapping[index]] ?? scope.row[header] ?? scope.row[`ExtraCol${index + 1}`] }}
           </template>
         </el-table-column>
       </el-table>
@@ -142,6 +153,26 @@
         <span class="dialog-footer">
           <el-button @click="sandboxVisible = false">取消</el-button>
           <el-button type="primary" :loading="sandboxLoading" @click="confirmSandbox">确认映射并落库</el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="addDictDialogVisible" title="快捷新增标准字段" width="450px" append-to-body>
+      <el-form :model="addDictForm" label-width="120px">
+        <el-form-item label="原始列名参考">
+          <el-input :model-value="addDictForm.originalHeader" disabled />
+        </el-form-item>
+        <el-form-item label="标准英文名" required>
+          <el-input v-model="addDictForm.standardName" placeholder="例如: NewDepth" />
+        </el-form-item>
+        <el-form-item label="中文含义" required>
+          <el-input v-model="addDictForm.chineseMeaning" placeholder="例如: 新测试深度" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="addDictDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="addDictLoading" @click="submitAddDict">保存并应用</el-button>
         </span>
       </template>
     </el-dialog>
@@ -153,8 +184,8 @@ import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 import { clearFiles, deleteFile } from '@/api/file'
-import { getAllColumnMappings } from '@/api/columnMapping'
-import { Delete, FolderOpened, Loading, Search, Upload, View } from '@element-plus/icons-vue'
+import { getAllColumnMappings, addColumnMapping } from '@/api/columnMapping'
+import { Delete, FolderOpened, Loading, Plus, Search, Upload, View } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -187,6 +218,52 @@ const previewDialogVisible = ref(false)
 const previewLoading = ref(false)
 const previewTableData = ref([])
 const previewColumns = ref([])
+
+const addDictDialogVisible = ref(false)
+const addDictLoading = ref(false)
+const currentEditIndex = ref(-1)
+const addDictForm = reactive({
+  originalHeader: '',
+  standardName: '',
+  chineseMeaning: ''
+})
+
+const openAddDictDialog = (index, originalHeader) => {
+  currentEditIndex.value = index
+  addDictForm.originalHeader = originalHeader
+  addDictForm.standardName = originalHeader.replace(/[^a-zA-Z0-9_]/g, '')
+  addDictForm.chineseMeaning = ''
+  addDictDialogVisible.value = true
+}
+
+const submitAddDict = async () => {
+  if (!addDictForm.standardName || !addDictForm.chineseMeaning) {
+    ElMessage.warning('标准英文名和中文含义不能为空')
+    return
+  }
+  
+  addDictLoading.value = true
+  try {
+    await addColumnMapping({
+      standardName: addDictForm.standardName,
+      chineseMeaning: addDictForm.chineseMeaning,
+      standardKey: addDictForm.standardName.toUpperCase()
+    })
+    
+    await fetchMappingOptions()
+    
+    if (currentEditIndex.value !== -1) {
+      previewSummary.value.suggestedMapping[currentEditIndex.value] = addDictForm.standardName
+    }
+    
+    ElMessage.success('新增标准字段成功并已自动应用')
+    addDictDialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error.message || '新增字典失败')
+  } finally {
+    addDictLoading.value = false
+  }
+}
 
 const checkPolling = () => {
   const isParsing = tableData.value.some(item => item.status === 0)
