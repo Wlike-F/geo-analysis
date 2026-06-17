@@ -42,38 +42,6 @@
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="显示与外观" name="appearance" icon="Monitor">
-          <div class="pane-content">
-            <div class="pane-header">
-              <h3 class="pane-title">系统偏好设置</h3>
-              <p class="pane-subtitle">调整展示精度、分页数量与动效体验。</p>
-            </div>
-            <el-divider />
-
-            <el-form label-width="150px" size="large" class="appearance-form">
-              <el-form-item label="测井数据精度">
-                <el-select v-model="sysSettings.precision" class="settings-select">
-                  <el-option label="默认 - 4 位小数" value="4" />
-                  <el-option label="精度 - 2 位小数" value="2" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="分页数量预设">
-                <el-radio-group v-model="sysSettings.pageSize">
-                  <el-radio :label="100">100 条/页</el-radio>
-                  <el-radio :label="300">300 条/页</el-radio>
-                  <el-radio :label="500">500 条/页</el-radio>
-                </el-radio-group>
-              </el-form-item>
-              <el-form-item label="开启平滑动画">
-                <el-switch v-model="sysSettings.smoothAnimation" />
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" icon="Setting" @click="saveSettings">应用外观设置</el-button>
-              </el-form-item>
-            </el-form>
-          </div>
-        </el-tab-pane>
-
         <el-tab-pane label="安全隐私" name="security" icon="Lock">
           <div class="pane-content">
             <div class="pane-header">
@@ -106,6 +74,58 @@
                 </div>
                 <el-button type="info" plain @click="showLoginLogDialog">查看详情</el-button>
               </div>
+              <el-divider border-style="dashed" />
+              <div class="security-item">
+                <div class="item-info">
+                  <div class="item-title">存储用量</div>
+                  <div class="item-desc">当前账号的数据占用概览。</div>
+                </div>
+                <el-button type="info" plain @click="showStorageDialog" :loading="storageLoading">查看用量</el-button>
+              </div>
+              <el-divider border-style="dashed" />
+              <div class="security-item">
+                <div class="item-info">
+                  <div class="item-title">清除缓存</div>
+                  <div class="item-desc">清理已删除文件的残留数据、脏数据和过期日志。</div>
+                </div>
+                <el-button type="danger" plain @click="handleCleanup" :loading="cleanupLoading">清除缓存</el-button>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="操作日志" name="oplog" icon="Document">
+          <div class="pane-content">
+            <div class="pane-header">
+              <h3 class="pane-title">操作日志</h3>
+              <p class="pane-subtitle">记录所有文件上传、解析、导出、删除等操作历史。</p>
+            </div>
+            <el-divider />
+
+            <el-table :data="opLogData" v-loading="opLogLoading" align="center" border style="width: 100%">
+              <el-table-column type="index" label="序号" width="60" align="center" />
+              <el-table-column prop="module" label="操作模块" width="120" align="center">
+                <template #default="{ row }">
+                  <el-tag size="small" :type="getModuleTagType(row.module)">{{ row.module }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="description" label="操作详情" min-width="200" />
+              <el-table-column prop="fileCount" label="文件数" width="80" align="center" />
+              <el-table-column prop="lineCount" label="行数" width="100" align="center">
+                <template #default="{ row }">
+                  {{ row.lineCount > 0 ? row.lineCount.toLocaleString() : '-' }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="createTime" label="操作时间" width="180" align="center" />
+            </el-table>
+            <div class="log-pagination">
+              <el-pagination
+                v-model:current-page="opLogPage.current"
+                v-model:page-size="opLogPage.size"
+                :total="opLogPage.total"
+                layout="total, prev, pager, next"
+                @current-change="fetchOpLogs"
+              />
             </div>
           </div>
         </el-tab-pane>
@@ -151,16 +171,40 @@
         <el-button @click="logDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog title="存储用量" v-model="storageDialogVisible" width="500px" append-to-body>
+      <div class="storage-grid" v-loading="storageLoading">
+        <div class="storage-item">
+          <div class="storage-label">已上传文件</div>
+          <div class="storage-value">{{ storageStats.fileCount ?? '-' }} <span class="storage-unit">个</span></div>
+        </div>
+        <div class="storage-item">
+          <div class="storage-label">解析总行数</div>
+          <div class="storage-value">{{ formatNumber(storageStats.totalLines) }} <span class="storage-unit">行</span></div>
+        </div>
+        <div class="storage-item">
+          <div class="storage-label">脏数据行数</div>
+          <div class="storage-value">{{ formatNumber(storageStats.dirtyLines) }} <span class="storage-unit">行</span></div>
+        </div>
+        <div class="storage-item">
+          <div class="storage-label">操作日志</div>
+          <div class="storage-value">{{ formatNumber(storageStats.logCount) }} <span class="storage-unit">条</span></div>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="storageDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { logout as logoutApi } from '@/api/auth'
-import { getLoginLogs } from '@/api/log'
-import { updateProfile, updatePwd, updateSettings } from '@/api/user'
+import { getLoginLogs, getAllLogs, getStorageStats, cleanupCache } from '@/api/log'
+import { updateProfile, updatePwd } from '@/api/user'
 import { useUserStore } from '@/store/user'
 import { getRefreshToken } from '@/utils/token'
 
@@ -187,26 +231,6 @@ watch(
   { immediate: true, deep: true }
 )
 
-const sysSettings = reactive({
-  precision: '4',
-  pageSize: 300,
-  smoothAnimation: true
-})
-
-watch(
-  () => userStore.userInfo,
-  (newVal) => {
-    if (newVal?.sysSettings) {
-      try {
-        Object.assign(sysSettings, JSON.parse(newVal.sysSettings))
-      } catch (error) {
-        console.error(error)
-      }
-    }
-  },
-  { immediate: true, deep: true }
-)
-
 const saveInfo = async () => {
   loading.value = true
   try {
@@ -222,16 +246,6 @@ const saveInfo = async () => {
     console.error(error)
   } finally {
     loading.value = false
-  }
-}
-
-const saveSettings = async () => {
-  try {
-    await updateSettings({ sysSettings: JSON.stringify(sysSettings) })
-    ElMessage.success('系统偏好已成功同步至云端')
-    await userStore.fetchUserInfo()
-  } catch (error) {
-    ElMessage.error('保存设置失败')
   }
 }
 
@@ -324,6 +338,94 @@ const showLoginLogDialog = () => {
   logDialogVisible.value = true
   fetchLoginLogs()
 }
+
+// --- 操作日志 ---
+const opLogLoading = ref(false)
+const opLogData = ref([])
+const opLogPage = ref({ current: 1, size: 10, total: 0 })
+
+const fetchOpLogs = async () => {
+  opLogLoading.value = true
+  try {
+    const res = await getAllLogs({ current: opLogPage.value.current, size: opLogPage.value.size })
+    if (res) {
+      opLogData.value = res.records || []
+      opLogPage.value.total = res.total || 0
+    }
+  } finally {
+    opLogLoading.value = false
+  }
+}
+
+const getModuleTagType = (module) => {
+  if (!module) return 'info'
+  if (module.includes('登录') || module.includes('注册')) return ''
+  if (module.includes('文件') || module.includes('扫描') || module.includes('预载') || module.includes('上传')) return 'success'
+  if (module.includes('导出') || module.includes('报表')) return 'warning'
+  if (module.includes('删除') || module.includes('清空') || module.includes('扫除')) return 'danger'
+  return 'info'
+}
+
+// --- 存储用量 ---
+const storageDialogVisible = ref(false)
+const storageLoading = ref(false)
+const storageStats = ref({})
+
+const showStorageDialog = async () => {
+  storageDialogVisible.value = true
+  storageLoading.value = true
+  try {
+    const res = await getStorageStats()
+    if (res) storageStats.value = res
+  } finally {
+    storageLoading.value = false
+  }
+}
+
+const formatNumber = (num) => {
+  if (num == null || num === '-') return '-'
+  return Number(num).toLocaleString()
+}
+
+// --- 清除缓存 ---
+const cleanupLoading = ref(false)
+
+const handleCleanup = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '将清理已删除文件的残留数据、脏数据、30天前的操作日志和过期令牌。此操作不可撤销，确定继续吗？',
+      '清除缓存',
+      { confirmButtonText: '确定清除', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch {
+    return // 用户取消
+  }
+
+  cleanupLoading.value = true
+  try {
+    const res = await cleanupCache()
+    if (res) {
+      const parts = []
+      if (res.deletedFiles > 0) parts.push(`${res.deletedFiles} 个文件`)
+      if (res.deletedRecords > 0) parts.push(`${res.deletedRecords.toLocaleString()} 条明细`)
+      if (res.deletedDirty > 0) parts.push(`${res.deletedDirty.toLocaleString()} 条脏数据`)
+      if (res.deletedLogs > 0) parts.push(`${res.deletedLogs} 条日志`)
+      if (res.deletedTokens > 0) parts.push(`${res.deletedTokens} 个令牌`)
+      ElMessage.success(parts.length > 0 ? `清理完成：${parts.join('、')}` : '当前无需清理的缓存数据')
+    }
+  } catch (error) {
+    ElMessage.error('缓存清理失败')
+  } finally {
+    cleanupLoading.value = false
+  }
+}
+
+// 进入操作日志 tab 时自动加载
+watch(activeTab, (val) => {
+  if (val === 'oplog' && opLogData.value.length === 0) {
+    fetchOpLogs()
+  }
+})
 </script>
 
 <style scoped>
@@ -399,10 +501,6 @@ const showLoginLogDialog = () => {
   color: #909399;
 }
 
-.settings-select {
-  width: 220px;
-}
-
 .security-list {
   max-width: 640px;
 }
@@ -431,6 +529,38 @@ const showLoginLogDialog = () => {
   margin-top: 15px;
   display: flex;
   justify-content: flex-end;
+}
+
+.storage-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  padding: 10px 0;
+}
+
+.storage-item {
+  background: var(--el-fill-color-lighter, #f5f7fa);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+
+.storage-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 8px;
+}
+
+.storage-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.storage-unit {
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
 }
 
 @media (max-width: 992px) {

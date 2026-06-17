@@ -82,56 +82,47 @@
 
     <el-row :gutter="24" class="content-row">
       <el-col :xs="24" :lg="15">
-        <el-card shadow="hover" class="dashboard-card info-card">
+        <el-card shadow="hover" class="dashboard-card workbench-card">
           <div class="section-title">
-            <div class="icon-block"><el-icon><Operation /></el-icon></div>
-            <span>系统概览与核心能力</span>
+            <span>我的工作台</span>
+            <el-button link type="primary" @click="$router.push('/datasource')">查看全部 →</el-button>
           </div>
 
-          <div class="section-body">
-            <el-alert
-              v-if="userStore.isAdmin"
-              title="管理员专属工作台"
-              type="success"
-              description="您已登录最高权限环境，当前所有核心分析节点准备就绪。"
-              show-icon
-              :closable="false"
-              class="mb-6 elegant-alert"
-            />
+          <div class="section-body" v-loading="filesLoading">
+            <el-empty v-if="recentFiles.length === 0 && !filesLoading" description="还没有上传文件，去数据源管理上传吧" :image-size="60" />
 
-            <p class="intro-text">
-              本系统为您提供专业的地质测井数据解析与归档能力，支持从文件加载、筛选提取到图表分析和结果导出的完整工作流。
-            </p>
+            <div v-else class="file-list">
+              <div
+                v-for="file in sortedFiles"
+                :key="file.id"
+                class="file-row"
+                :class="{ 'file-row--pending': file.status === 0 || file.status === -1 }"
+              >
+                <div class="file-main">
+                  <span class="file-name">{{ file.fileName }}</span>
+                  <div class="file-meta">
+                    <el-tag
+                      v-if="file.status === 0"
+                      size="small" type="warning" effect="plain"
+                    >解析中</el-tag>
+                    <el-tag
+                      v-else-if="file.status === -1"
+                      size="small" type="danger" effect="plain"
+                    >解析失败</el-tag>
+                    <span v-else class="file-rows">{{ (file.totalRows || 0).toLocaleString() }} 行</span>
+                    <span class="file-time">{{ formatRelativeTime(file.createTime) }}</span>
+                  </div>
+                </div>
+                <div class="file-actions" v-if="file.status === 1">
+                  <el-button link type="primary" size="small" @click="$router.push('/files')">看板</el-button>
+                  <el-button link type="primary" size="small" @click="$router.push('/visualization')">可视化</el-button>
+                </div>
+              </div>
+            </div>
 
-            <div class="feature-grid mt-4">
-              <div class="feature-item">
-                <div class="f-icon"><el-icon><CopyDocument /></el-icon></div>
-                <div class="f-desc">
-                  <strong>多通道极速加载</strong>
-                  <span>支持大批量 TXT 文件探测、解析与基础预览。</span>
-                </div>
-              </div>
-              <div class="feature-item">
-                <div class="f-icon"><el-icon><Reading /></el-icon></div>
-                <div class="f-desc">
-                  <strong>并发标签页比对</strong>
-                  <span>支持多文件并发切换，在同一视图中横向对比关键井曲线属性。</span>
-                </div>
-              </div>
-              <div class="feature-item">
-                <div class="f-icon"><el-icon><Filter /></el-icon></div>
-                <div class="f-desc">
-                  <strong>精细门限矩阵</strong>
-                  <span>支持多字段阈值过滤、区间筛选与连续异常测段提取。</span>
-                </div>
-              </div>
-              <div class="feature-item">
-                <div class="f-icon"><el-icon><HelpFilled /></el-icon></div>
-                <div class="f-desc">
-                  <strong>一键导出归档</strong>
-                  <span>支持 Excel、CSV 与批量压缩包导出，便于复核与归档。</span>
-                </div>
-              </div>
+            <div v-if="pendingHint" class="pending-hint">
+              <el-icon><WarningFilled /></el-icon>
+              <span>{{ pendingHint }}</span>
             </div>
           </div>
         </el-card>
@@ -140,20 +131,27 @@
       <el-col :xs="24" :lg="9">
         <el-card shadow="hover" class="dashboard-card side-card">
           <div class="section-title">
-            <div class="icon-block"><el-icon><Lightning /></el-icon></div>
-            <span>快捷操作向导</span>
+            <span>快捷操作</span>
           </div>
 
           <div class="section-body">
-            <div class="quick-action-area">
-              <el-button type="primary" size="large" class="quick-btn block-btn" @click="$router.push('/files')">
-                <el-icon class="mr-2"><Guide /></el-icon>
-                前往业务控制台
-              </el-button>
-              <el-button size="large" class="quick-btn block-btn ghost-btn" @click="$router.push('/settings')">
-                <el-icon class="mr-2"><Setting /></el-icon>
-                打开偏好参数配置
-              </el-button>
+            <div class="shortcut-grid">
+              <div class="shortcut-item" @click="$router.push('/datasource')">
+                <strong>数据源管理</strong>
+                <span>上传与扫描文件</span>
+              </div>
+              <div class="shortcut-item" @click="$router.push('/files')">
+                <strong>测井数据看板</strong>
+                <span>浏览与筛选数据</span>
+              </div>
+              <div class="shortcut-item" @click="$router.push('/extract')">
+                <strong>异常测段提取</strong>
+                <span>条件筛选与导出</span>
+              </div>
+              <div class="shortcut-item" @click="$router.push('/visualization')">
+                <strong>曲线图表</strong>
+                <span>多通道可视化分析</span>
+              </div>
             </div>
 
             <div class="recent-act mt-8">
@@ -190,32 +188,62 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useUserStore } from '@/store/user'
-import { getDashboardStats } from '@/api/dashboard'
+import { getDashboardStats, getRecentFiles } from '@/api/dashboard'
 import {
-  CopyDocument,
   DataLine,
   Document,
   Download,
-  Filter,
-  Guide,
-  HelpFilled,
-  Lightning,
   Monitor,
-  Operation,
-  Reading,
   RefreshRight,
-  Setting
+  WarningFilled
 } from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 const loading = ref(true)
 const recentLogs = ref([])
+const recentFiles = ref([])
+const filesLoading = ref(true)
 const statsData = ref({
   totalFiles: 0,
   totalLines: 0,
   totalExports: 0,
   systemStatus: '正在加载...'
 })
+
+// 文件排序：解析中/失败排前面，成功排后面
+const sortedFiles = computed(() => {
+  return [...recentFiles.value].sort((a, b) => {
+    const priority = { 0: 0, '-1': 1 } // 0=解析中最前, -1=失败次之
+    const pa = priority[a.status] ?? 2
+    const pb = priority[b.status] ?? 2
+    if (pa !== pb) return pa - pb
+    return new Date(b.createTime) - new Date(a.createTime)
+  })
+})
+
+// 待处理提示
+const pendingHint = computed(() => {
+  const parsing = recentFiles.value.filter(f => f.status === 0).length
+  const failed = recentFiles.value.filter(f => f.status === -1).length
+  if (failed > 0) return `有 ${failed} 个文件解析失败，建议检查文件格式后重新上传`
+  if (parsing > 0) return `有 ${parsing} 个文件正在解析中，请稍后查看`
+  return ''
+})
+
+const formatRelativeTime = (timeStr) => {
+  if (!timeStr) return ''
+  const now = new Date()
+  const time = new Date(timeStr)
+  const diffMs = now - time
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 1) return '刚刚'
+  if (diffMin < 60) return `${diffMin} 分钟前`
+  const diffHour = Math.floor(diffMin / 60)
+  if (diffHour < 24) return `${diffHour} 小时前`
+  const diffDay = Math.floor(diffHour / 24)
+  if (diffDay < 30) return `${diffDay} 天前`
+  return timeStr.slice(0, 10)
+}
 
 const fetchStats = async () => {
   try {
@@ -253,7 +281,22 @@ const statusColorClass = computed(() => {
 
 onMounted(() => {
   fetchStats()
+  fetchFiles()
 })
+
+const fetchFiles = async () => {
+  try {
+    filesLoading.value = true
+    const data = await getRecentFiles()
+    if (Array.isArray(data)) {
+      recentFiles.value = data
+    }
+  } catch (error) {
+    console.error('获取最近文件失败', error)
+  } finally {
+    filesLoading.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -496,7 +539,7 @@ p {
 .section-title {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
   margin-bottom: 8px;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--el-border-color-light);
@@ -509,67 +552,112 @@ p {
   padding-top: 8px;
 }
 
-.icon-block {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+/* --- 工作台文件列表 --- */
+.file-list {
   display: flex;
+  flex-direction: column;
+}
+
+.file-row {
+  display: flex;
+  justify-content: space-between;
   align-items: center;
-  justify-content: center;
-  background: var(--bg-gradient-blue);
-  color: var(--accent-blue);
+  padding: 12px 0;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
 }
 
-.elegant-alert {
-  border: 1px solid var(--el-color-success-light-5);
-  background-color: #f0fdf4;
+.file-row:last-child {
+  border-bottom: none;
 }
 
-.intro-text {
-  font-size: 14px;
-  line-height: 1.7;
-  color: var(--el-text-color-regular);
+.file-row--pending {
+  background: var(--el-fill-color-lighter);
+  margin: 0 -12px;
+  padding: 12px;
+  border-radius: 6px;
+  border-bottom: none;
 }
 
-.feature-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 20px;
+.file-row--pending + .file-row--pending {
+  margin-top: 4px;
 }
 
-.feature-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 16px;
-  border-radius: 8px;
-  background: var(--el-bg-color-page);
-  transition: all 0.2s ease;
-}
-
-.feature-item:hover {
-  background: #fff;
-  box-shadow: var(--shadow-sm);
-}
-
-.f-icon {
-  margin-top: 2px;
-  font-size: 20px;
-  color: var(--el-color-primary);
-}
-
-.f-desc {
+.file-main {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--el-text-color-regular);
+  min-width: 0;
 }
 
-.f-desc strong {
+.file-name {
   font-size: 14px;
+  font-weight: 500;
   color: var(--el-text-color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.file-rows {
+  font-family: var(--font-mono);
+}
+
+.file-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.pending-hint {
+  margin-top: 16px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--el-color-warning-light-9);
+  color: var(--el-color-warning);
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* --- 快捷操作网格 --- */
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.shortcut-item {
+  padding: 14px;
+  border-radius: 8px;
+  background: var(--el-fill-color-lighter);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.shortcut-item:hover {
+  background: var(--el-color-primary-light-9);
+}
+
+.shortcut-item strong {
+  font-size: 13px;
+  color: var(--el-text-color-primary);
+}
+
+.shortcut-item span {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .quick-action-area {
@@ -635,8 +723,8 @@ p {
     font-size: 22px;
   }
 
-  .feature-grid {
-    grid-template-columns: 1fr;
+  .shortcut-grid {
+    grid-template-columns: 1fr 1fr;
   }
 }
 

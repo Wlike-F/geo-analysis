@@ -1,32 +1,24 @@
 <template>
   <div class="files-container">
-    <el-card shadow="never" class="mb-20 step-card">
-      <el-steps :active="activeStep" align-center finish-status="success">
-        <el-step title="第一步：数据选择" description="从数据源选择文件" />
-        <el-step title="第二步：阈值筛选" description="多文件或单文件条件过滤" />
-        <el-step title="第三步：结果导出" description="筛选结果与异常测段导出" />
-      </el-steps>
-    </el-card>
+    <!-- ① 紧凑标题栏（替代步骤条） -->
+    <div class="page-header mb-20">
+      <div class="page-header-left">
+        <h3 class="page-title">异常测段提取</h3>
+        <el-tag v-if="tabs.length" type="info" effect="plain" size="small">已选 {{ tabs.length }} 个文件</el-tag>
+      </div>
+      <div class="page-header-right">
+        <el-button type="primary" icon="FolderOpened" @click="openFileSelector">选择文件</el-button>
+        <el-button type="danger" icon="Delete" plain @click="closeAllTabs" :disabled="!tabs.length">清空已选</el-button>
+      </div>
+    </div>
 
-    <el-card shadow="hover" class="action-card mb-20">
-      <el-row :gutter="20" align="middle">
-        <el-col :xs="24" :sm="24" :md="6" class="mb-xs">
-          <div class="action-title">数据选择</div>
-          <p class="action-desc">从基础数据源中心选择已挂载的测井文件。</p>
-        </el-col>
-
-        <el-col :xs="24" :sm="24" :md="18" class="action-buttons-col">
-          <el-button type="primary" icon="FolderOpened" @click="openFileSelector">选择文件</el-button>
-          <el-button type="danger" icon="Delete" plain @click="closeAllTabs" :disabled="!tabs.length">清空已选文件</el-button>
-        </el-col>
-      </el-row>
-    </el-card>
-
-    <el-card v-if="tabs.length > 0" shadow="never" class="elegant-filters mb-20">
+    <!-- ③ 全局筛选：虚线边框区分 -->
+    <el-card v-if="tabs.length > 0" shadow="never" class="global-filters-card mb-20">
       <div class="filter-header">
         <span class="title">多文件统一筛选</span>
         <div class="actions">
           <el-button type="primary" icon="Filter" @click="applyGlobalFilters">统一提取全部</el-button>
+          <el-button type="info" icon="Refresh" plain @click="clearGlobalFilters">清除筛选</el-button>
           <el-button color="var(--el-color-success)" icon="Download" plain @click="handleBatchExport">批量导出</el-button>
         </div>
       </div>
@@ -60,36 +52,40 @@
             :label="item.title"
             :name="item.name"
           >
-            <div class="filter-bar mb-20 p-15 bg-gray">
-              <el-row :gutter="20" class="filter-row" align="middle">
-                <el-col :xs="24" :lg="16">
-                  <el-row :gutter="20">
+            <!-- ⑤ 筛选条件区：记录数提到顶部，按钮放底部 -->
+            <div class="filter-bar mb-20 p-15 per-file-filter">
+              <div class="filter-stats-bar">
+                <span class="count-label">筛选记录数</span>
+                <strong class="count-value">{{ item.totalRows.toLocaleString() }}</strong>
+                <span class="count-unit">行</span>
+              </div>
+
+              <el-row :gutter="20" class="filter-row">
+                <el-col :xs="24" :lg="18">
+                  <el-row :gutter="16">
                     <el-col
                       v-for="col in item.columns"
                       :key="col"
                       :xs="24"
                       :sm="12"
-                      :md="12"
+                      :md="8"
                       class="filter-item-col"
                     >
-                      <div class="flex-center">
-                        <span class="filter-label filter-label-fixed">{{ col }}</span>
-                        <el-input v-model="item.filters[col].min" class="range-input" placeholder="最小值" clearable />
+                      <div class="filter-field">
+                        <span class="filter-label">{{ col }}</span>
+                        <el-input v-model="item.filters[col].min" class="range-input" placeholder="Min" clearable />
                         <span class="separator">-</span>
-                        <el-input v-model="item.filters[col].max" class="range-input" placeholder="最大值" clearable />
+                        <el-input v-model="item.filters[col].max" class="range-input" placeholder="Max" clearable />
                       </div>
                     </el-col>
                   </el-row>
                 </el-col>
 
-                <el-col :xs="24" :lg="8" class="filter-actions-col">
+                <el-col :xs="24" :lg="6" class="filter-actions-col">
                   <div class="filter-actions">
                     <el-button type="primary" icon="Filter" @click="applyFilters(item)">提取数据</el-button>
                     <el-button type="info" icon="Refresh" plain @click="clearFilters(item)">清除筛选</el-button>
                     <el-button type="success" icon="Download" plain @click="exportToExcel(item)">导出 Excel</el-button>
-                  </div>
-                  <div class="count-tip">
-                    筛选总记录数：<strong class="count-value">{{ item.totalRows }}</strong> 行
                   </div>
                 </el-col>
               </el-row>
@@ -510,6 +506,23 @@ const clearFilters = (tabObj) => {
   ElMessage.success('过滤条件已重置')
 }
 
+const clearGlobalFilters = () => {
+  // 清空全局筛选条件
+  Object.keys(globalFilters.value).forEach(key => {
+    globalFilters.value[key] = { min: '', max: '' }
+  })
+  // 同步清空所有 tab 的筛选条件并重新加载
+  tabs.value.forEach(tab => {
+    ;(tab.columns || []).forEach(col => {
+      tab.filters[col] = { min: '', max: '' }
+    })
+    tab.hasFiltered = false
+    tab.currentPage = 1
+    fetchPageData(tab)
+  })
+  ElMessage.success('所有筛选条件已清除')
+}
+
 const exportToExcel = async (tabObj) => {
   if (!tabObj.fileId) {
     ElMessage.warning('当前没有任何数据归档信息可以导出')
@@ -721,27 +734,33 @@ const extractContinuousSegments = async () => {
   margin-bottom: 20px;
 }
 
-.action-card {
-  border-radius: 12px;
-  background: linear-gradient(145deg, #ffffff 0%, #f8fbfd 100%);
+/* ① 紧凑标题栏 */
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 10px;
 }
 
-.action-title {
+.page-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.page-title {
+  margin: 0;
   font-size: 18px;
   font-weight: 700;
-  color: #1f2d3d;
+  color: var(--el-text-color-primary);
 }
 
-.action-desc {
-  margin-top: 5px;
-  font-size: 13px;
-  color: #909399;
-}
-
-.action-buttons-col {
+.page-header-right {
   display: flex;
   gap: 10px;
-  align-items: center;
 }
 
 .split-layout {
@@ -761,7 +780,8 @@ const extractContinuousSegments = async () => {
 
 .filter-bar {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .filter-row {
@@ -772,25 +792,68 @@ const extractContinuousSegments = async () => {
   margin-bottom: 12px;
 }
 
+/* ⑤ 筛选操作区布局 */
 .filter-actions-col {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
   justify-content: center;
-  border-left: 1px solid #ebeef5;
-  padding-left: 20px;
 }
 
 .filter-actions {
-  margin-bottom: 12px;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  flex-direction: column;
   gap: 10px;
 }
 
-.filter-label-fixed {
-  width: 60px;
+.filter-actions :deep(.el-button) {
+  display: block;
+  width: 100%;
+  margin-left: 0;
+  box-sizing: border-box;
+}
+
+.filter-stats-bar {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+}
+
+.count-label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.count-value {
+  font-size: 20px;
+  font-family: var(--font-mono);
+  color: var(--el-color-primary);
+}
+
+.count-unit {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+/* ④ 列名自适应宽度 */
+.filter-field {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 6px;
+}
+
+.filter-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+  white-space: nowrap;
+  min-width: 40px;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 
 .range-input {
@@ -829,17 +892,21 @@ const extractContinuousSegments = async () => {
   padding: 15px 20px;
 }
 
-.bg-gray {
-  background-color: #f8f9fc;
-  border: 1px solid #ebeef5;
-  border-radius: 6px;
+/* ③ 全局筛选 vs 单文件筛选视觉区分 */
+.global-filters-card {
+  border: 2px dashed var(--el-border-color);
+  border-radius: 10px;
+  background: var(--el-fill-color-lighter);
 }
 
-.flex-center {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
+.global-filters-card :deep(.el-card__body) {
+  padding: 16px 20px;
+}
+
+.per-file-filter {
+  background: var(--el-bg-color-page);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
 }
 
 .filter-label {
@@ -850,32 +917,12 @@ const extractContinuousSegments = async () => {
 }
 
 .separator {
-  margin: 0 10px;
-  color: #909399;
-}
-
-.count-tip {
-  font-size: 13px;
-  color: #606266;
-}
-
-.count-value {
-  font-size: 16px;
-  color: #1890ff;
+  margin: 0 4px;
+  color: var(--el-text-color-placeholder);
 }
 
 :deep(.el-input-group__prepend) {
   background-color: #fff;
-}
-
-.elegant-filters {
-  border: 1px solid var(--el-border-color-light);
-  border-radius: var(--spacing-2);
-  background: var(--el-bg-color);
-}
-
-.elegant-filters :deep(.el-card__body) {
-  padding: 16px 20px;
 }
 
 .filter-header {
@@ -1055,12 +1102,11 @@ const extractContinuousSegments = async () => {
 @media (max-width: 992px) {
   .filter-actions-col {
     align-items: flex-start;
-    border-left: none;
-    padding-left: 0;
     margin-top: 15px;
   }
 
   .filter-actions {
+    flex-direction: row;
     justify-content: flex-start;
   }
 }
@@ -1070,21 +1116,25 @@ const extractContinuousSegments = async () => {
     margin-bottom: 15px;
   }
 
-  .action-buttons-col,
-  .dialog-toolbar,
-  .analysis-results__header,
-  .analysis-operator-row {
+  .page-header {
     flex-direction: column;
-    align-items: stretch;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .page-header-right {
+    width: 100%;
   }
 
   .split-layout {
     flex-direction: column;
   }
 
-  .f-group {
-    width: 100%;
-    justify-content: space-between;
+  .dialog-toolbar,
+  .analysis-results__header,
+  .analysis-operator-row {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .analysis-card,
@@ -1094,13 +1144,23 @@ const extractContinuousSegments = async () => {
     width: 100%;
   }
 
-  .filter-item-col .flex-center {
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    gap: 8px;
+  .f-group {
+    width: 100%;
+    justify-content: space-between;
   }
 
-  .filter-label-fixed {
+  .filter-field {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .filter-label {
+    min-width: 100%;
+  }
+
+  .dialog-search-input,
+  .range-input,
+  .operator-select {
     width: 100%;
   }
 }

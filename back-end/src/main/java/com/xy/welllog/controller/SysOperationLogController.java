@@ -3,18 +3,26 @@ package com.xy.welllog.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.xy.welllog.common.Result;
+import com.xy.welllog.entity.LogFileInfo;
 import com.xy.welllog.entity.SysOperationLog;
 import com.xy.welllog.entity.SysUser;
+import com.xy.welllog.service.LogFileInfoService;
+import com.xy.welllog.service.LogDataRecordService;
 import com.xy.welllog.service.SysOperationLogService;
 import com.xy.welllog.service.SysUserService;
 import com.xy.welllog.utils.JwtUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/sys/log")
@@ -25,6 +33,15 @@ public class SysOperationLogController {
     
     @Autowired
     private SysUserService sysUserService;
+
+    @Autowired
+    private LogFileInfoService logFileInfoService;
+
+    @Autowired
+    private LogDataRecordService logDataRecordService;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
     
     @Autowired
     private JwtUtils jwtUtils;
@@ -65,5 +82,118 @@ public class SysOperationLogController {
 
         Page<SysOperationLog> logPage = sysOperationLogService.page(pageParam, wrapper);
         return Result.success(logPage);
+    }
+
+    /**
+     * 获取当前用户的所有操作日志（不限于登录）
+     */
+    @GetMapping("/all")
+    public Result<Page<SysOperationLog>> getAllLogs(
+            @RequestParam(defaultValue = "1") Integer current,
+            @RequestParam(defaultValue = "10") Integer size,
+            HttpServletRequest request) {
+
+        Long userId = getUserId(request);
+        if (userId == null) {
+            return Result.failed("用户未登录");
+        }
+
+        Page<SysOperationLog> pageParam = new Page<>(current, size);
+        LambdaQueryWrapper<SysOperationLog> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(SysOperationLog::getUserId, userId)
+               .orderByDesc(SysOperationLog::getCreateTime);
+
+        Page<SysOperationLog> logPage = sysOperationLogService.page(pageParam, wrapper);
+        return Result.success(logPage);
+    }
+
+    /**
+     * 获取当前用户的存储用量统计
+     */
+    @GetMapping("/storage")
+    public Result<Map<String, Object>> getStorageStats(HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) {
+            return Result.failed("用户未登录");
+        }
+
+        Map<String, Object> stats = new LinkedHashMap<>();
+
+        // 文件数
+        long fileCount = logFileInfoService.count(new LambdaQueryWrapper<LogFileInfo>()
+                .eq(LogFileInfo::getUserId, userId)
+                .ne(LogFileInfo::getStatus, 2));
+        stats.put("fileCount", fileCount);
+
+        // 总解析行数
+        Long totalLines = null;
+        try {
+            totalLines = jdbcTemplate.queryForObject(
+                    "SELECT IFNULL(SUM(total_rows), 0) FROM log_file_info WHERE user_id = ? AND status != 2",
+                    Long.class, userId);
+        } catch (Exception e) {
+            totalLines = 0L;
+        }
+        stats.put("totalLines", totalLines != null ? totalLines : 0L);
+
+        // 脏数据行数
+        Long dirtyLines = null;
+        try {
+            dirtyLines = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM log_dirty_data WHERE file_id IN (SELECT id FROM log_file_info WHERE user_id = ? AND status != 2)",
+                    Long.class, userId);
+        } catch (Exception e) {
+            dirtyLines = 0L;
+        }
+        stats.put("dirtyLines", dirtyLines != null ? dirtyLines : 0L);
+
+        // 操作日志总数
+        long logCount = sysOperationLogService.count(new LambdaQueryWrapper<SysOperationLog>()
+                .eq(SysOperationLog::getUserId, userId));
+        stats.put("logCount", logCount);
+
+        return Result.success(stats);
+    }
+
+    /**
+     * 清除缓存：一键清理已删除文件的残留数据和过期日志
+     */
+    @PostMapping("/cleanup")
+    public Result<Map<String, Object>> cleanup(HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) {
+            return Result.failed("用户未登录");
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+
+        // 1. 删除已删除文件(status=2)的明细数据
+        int deletedRecords = jdbcTemplate.update(
+                "DELETE FROM log_data_records WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)");
+        result.put("deletedRecords", deletedRecords);
+
+        // 2. 删除已删除文件的脏数据
+        int deletedDirty = jdbcTemplate.update(
+                "DELETE FROM log_dirty_data WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)");
+        result.put("deletedDirty", deletedDirty);
+
+        // 3. 物理删除已标记删除的文件元数据
+        int deletedFiles = jdbcTemplate.update(
+                "DELETE FROM log_file_info WHERE status = 2");
+        result.put("deletedFiles", deletedFiles);
+
+        // 4. 删除 30 天前的操作日志
+        int deletedLogs = jdbcTemplate.update(
+                "DELETE FROM sys_operation_log WHERE create_time < DATE_SUB(NOW(), INTERVAL 30 DAY)");
+        result.put("deletedLogs", deletedLogs);
+
+        // 5. 删除已撤销或已过期的刷新令牌
+        int deletedTokens = jdbcTemplate.update(
+                "DELETE FROM sys_refresh_token WHERE revoked = 1 OR expires_at < NOW()");
+        result.put("deletedTokens", deletedTokens);
+
+        sysOperationLogService.recordLog("系统管理", "执行缓存清理", 0, 0L, userId);
+
+        return Result.success(result, "缓存清理完成");
     }
 }

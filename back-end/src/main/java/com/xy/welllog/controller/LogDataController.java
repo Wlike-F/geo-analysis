@@ -2,6 +2,8 @@ package com.xy.welllog.controller;
 
 import cn.hutool.json.JSONUtil;
 import com.alibaba.excel.EasyExcel;
+import com.alibaba.excel.ExcelWriter;
+import com.alibaba.excel.write.metadata.WriteSheet;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
@@ -45,6 +47,11 @@ public class LogDataController {
 
     @Autowired
     private JwtUtils jwtUtils;
+
+    /** 每批导出行数（受限于 MybatisPlus 分页上限 10000） */
+    private static final int EXPORT_BATCH_SIZE = 10000;
+    /** 单次导出最大行数（xlsx 格式上限 1,048,576，留余量给表头） */
+    private static final int EXPORT_MAX_TOTAL = 1000000;
 
     private Long getUserId(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
@@ -162,47 +169,28 @@ public class LogDataController {
                     LogFileInfo fileInfo = fileInfoService.getById(query.getFileId());
                     if (fileInfo == null) continue;
 
+                    List<String> cols = getColumns(query.getFileId());
+                    if (cols.isEmpty()) continue;
+
                     String fileName = fileInfo.getFileName() != null ? fileInfo.getFileName() : ("File_" + query.getFileId() + ".txt");
                     fileName = fileName.replaceAll("[\\\\/?*:\\[\\]]", "_") + ".xlsx";
-
-                    query.setCurrent(1);
-                    query.setSize(500000);
-
-                    Page<Map<String, Object>> pageData = pageQuery(query).getData();
-                    if (pageData == null || pageData.getRecords() == null || pageData.getRecords().isEmpty()) {
-                        continue;
-                    }
-
-                    List<String> cols = JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
-                    List<List<String>> head = new ArrayList<>();
-                    for (String col : cols) {
-                        head.add(Collections.singletonList(col));
-                    }
-
-                    List<List<Object>> dataList = new ArrayList<>();
-                    for (Map<String, Object> map : pageData.getRecords()) {
-                        List<Object> row = new ArrayList<>();
-                        for (String col : cols) {
-                            Object val = map.get(col);
-                            if (val == null) val = map.get(col.toLowerCase());
-                            if (val == null) val = "";
-                            row.add(val);
-                        }
-                        dataList.add(row);
-                    }
 
                     java.util.zip.ZipEntry zipEntry = new java.util.zip.ZipEntry(fileName);
                     zos.putNextEntry(zipEntry);
 
-                    EasyExcel.write(zos)
-                            .head(head)
-                            .autoCloseStream(Boolean.FALSE)
-                            .sheet("Filtered Data")
-                            .doWrite(dataList);
+                    List<List<String>> head = new ArrayList<>();
+                    for (String col : cols) {
+                        head.add(Collections.singletonList(col));
+                    }
+                    ExcelWriter excelWriter = EasyExcel.write(zos).head(head).autoCloseStream(Boolean.FALSE).build();
+                    WriteSheet writeSheet = EasyExcel.writerSheet("Filtered Data").build();
+
+                    long fileLineCount = streamWriteData(excelWriter, writeSheet, query.getFileId(), query, cols);
+                    excelWriter.finish();
 
                     zos.closeEntry();
                     exportedFileCount++;
-                    exportedLineCount += pageData.getRecords().size();
+                    exportedLineCount += fileLineCount;
                 }
                 zos.finish();
             }
@@ -218,10 +206,8 @@ public class LogDataController {
     public void exportExcel(@PathVariable Long fileId, @RequestBody(required = false) LogDataQueryDTO query, HttpServletRequest request, HttpServletResponse response) {
         if (query == null) query = new LogDataQueryDTO();
         query.setFileId(fileId);
-        query.setCurrent(1);
-        query.setSize(500000);
 
-        Page<Map<String, Object>> pageData = pageQuery(query).getData();
+        List<String> cols = getColumns(fileId);
 
         try {
             response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -229,90 +215,273 @@ public class LogDataController {
             String fileName = URLEncoder.encode("Filtered_Data_" + fileId, StandardCharsets.UTF_8).replaceAll("\\+", "%20");
             response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + fileName + ".xlsx");
 
-            LogFileInfo fileInfo = fileInfoService.getById(fileId);
-            List<String> cols = JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
-
             List<List<String>> head = new ArrayList<>();
             for (String col : cols) {
                 head.add(Collections.singletonList(col));
             }
 
-            List<List<Object>> dataList = new ArrayList<>();
-            for (Map<String, Object> map : pageData.getRecords()) {
-                List<Object> row = new ArrayList<>();
-                for (String col : cols) {
-                    Object val = map.get(col);
-                    if (val == null) val = map.get(col.toLowerCase());
-                    if (val == null) val = "";
-                    row.add(val);
-                }
-                dataList.add(row);
+            try (ExcelWriter excelWriter = EasyExcel.write(response.getOutputStream()).head(head).build()) {
+                WriteSheet writeSheet = EasyExcel.writerSheet("Filtered Data").build();
+                long totalWritten = streamWriteData(excelWriter, writeSheet, fileId, query, cols);
+                operationLogService.recordLog("报表导出", "筛选结果Excel导出", 1, totalWritten, getUserId(request));
             }
-
-            EasyExcel.write(response.getOutputStream())
-                    .head(head)
-                    .sheet("Filtered Data")
-                    .doWrite(dataList);
-            operationLogService.recordLog("报表导出", "筛选结果Excel导出", 1, (long) pageData.getRecords().size(), getUserId(request));
         } catch (Exception e) {
             log.error("导出Excel异常", e);
             response.setStatus(500);
         }
     }
 
+    /**
+     * 构建导出用的查询条件（与 pageQuery 中过滤逻辑保持一致）
+     */
+    private QueryWrapper<LogDataRecord> buildExportQueryWrapper(LogDataQueryDTO query) {
+        QueryWrapper<LogDataRecord> wrapper = new QueryWrapper<>();
+        wrapper.eq("file_id", query.getFileId());
+        if (query.getFilters() != null) {
+            for (Map.Entry<String, LogDataQueryDTO.FilterRange> entry : query.getFilters().entrySet()) {
+                String col = entry.getKey();
+                String colLower = col.toLowerCase();
+                LogDataQueryDTO.FilterRange range = entry.getValue();
+                if (range == null || (range.getMin() == null && range.getMax() == null)) continue;
+                String dbCol = getMappedDbColumn(colLower);
+                if (dbCol.equals("unmapped")) {
+                    if (range.getMin() != null)
+                        wrapper.apply("JSON_EXTRACT(extra_json, CONCAT('$.' ,{0})) >= {1}", col, range.getMin());
+                    if (range.getMax() != null)
+                        wrapper.apply("JSON_EXTRACT(extra_json, CONCAT('$.' ,{0})) <= {1}", col, range.getMax());
+                } else {
+                    if (range.getMin() != null) wrapper.ge(dbCol, range.getMin());
+                    if (range.getMax() != null) wrapper.le(dbCol, range.getMax());
+                }
+            }
+        }
+        wrapper.orderByAsc("id");
+        return wrapper;
+    }
+
+    /**
+     * 根据文件 ID 获取列名列表
+     */
+    private List<String> getColumns(Long fileId) {
+        LogFileInfo fileInfo = fileInfoService.getById(fileId);
+        if (fileInfo == null || fileInfo.getColumnsJson() == null) {
+            return new ArrayList<>();
+        }
+        return JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
+    }
+
+    /**
+     * 流式分页写入 Excel，避免一次性加载全部数据到内存。
+     * 每页读取 EXPORT_BATCH_SIZE 条记录并立即写入 ExcelWriter，
+     * 累计最多写入 EXPORT_MAX_TOTAL 行。
+     *
+     * @return 实际写入的总行数
+     */
+    private long streamWriteData(ExcelWriter writer, WriteSheet sheet, Long fileId,
+                                 LogDataQueryDTO query, List<String> cols) {
+        long totalWritten = 0;
+        int currentPage = 1;
+
+        while (totalWritten < EXPORT_MAX_TOTAL) {
+            QueryWrapper<LogDataRecord> wrapper = buildExportQueryWrapper(query);
+            Page<LogDataRecord> pageParam = new Page<>(currentPage, EXPORT_BATCH_SIZE);
+            // 关闭 count 查询以提升性能
+            pageParam.setSearchCount(false);
+            Page<LogDataRecord> recordPage = dataRecordService.page(pageParam, wrapper);
+            List<LogDataRecord> records = recordPage.getRecords();
+
+            if (records == null || records.isEmpty()) break;
+
+            List<List<Object>> rows = new ArrayList<>(records.size());
+            for (LogDataRecord record : records) {
+                List<Object> row = new ArrayList<>(cols.size());
+                for (String colName : cols) {
+                    row.add(readRecordValue(record, colName));
+                }
+                rows.add(row);
+            }
+
+            writer.write(rows, sheet);
+            totalWritten += records.size();
+
+            if (records.size() < EXPORT_BATCH_SIZE) break;
+            currentPage++;
+        }
+
+        return totalWritten;
+    }
+
+    /**
+     * 根据列名将 LogDataRecord 中的值读取出来，统一转换为 Object
+     */
+    private Object readRecordValue(LogDataRecord record, String colName) {
+        if (colName == null) return "";
+        String colLower = colName.trim().toLowerCase();
+        if (colLower.equals("depth") || colLower.contains("tvd") || colLower.contains("dep")) {
+            return record.getDepth() != null ? record.getDepth() : "";
+        }
+        switch (colLower) {
+            case "ac":  return record.getAc()  != null ? record.getAc()  : "";
+            case "den": return record.getDen() != null ? record.getDen() : "";
+            case "gr":  return record.getGr()  != null ? record.getGr()  : "";
+            case "sp":  return record.getSp()  != null ? record.getSp()  : "";
+            case "rt":  return record.getRt()  != null ? record.getRt()  : "";
+            default: break;
+        }
+        Map<String, Object> extra = record.getExtraJson();
+        if (extra != null) {
+            Object val = extra.get(colName);
+            if (val == null) val = extra.get(colName.toUpperCase());
+            if (val == null) val = extra.get(colLower);
+            if (val != null) return val;
+        }
+        return "";
+    }
+
+    /** ECharts 降采样最大点数，超出此值将使用 LTTB 算法抽稀 */
+    private static final int ECHARTS_MAX_POINTS = 5000;
+
     @GetMapping("/echarts/{fileId}")
     public Result<Map<String, List<Object>>> getEchartsData(@PathVariable Long fileId) {
-        QueryWrapper<LogDataRecord> wrapper = new QueryWrapper<>();
-        wrapper.eq("file_id", fileId).orderByAsc("depth");
-        List<LogDataRecord> list = dataRecordService.list(wrapper);
-
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
         List<String> cols = new ArrayList<>();
         if (fileInfo != null && fileInfo.getColumnsJson() != null) {
             cols = JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
         }
 
-        Map<String, List<Object>> result = new HashMap<>();
+        // 1. 查询总记录数，决定加载策略
+        QueryWrapper<LogDataRecord> countWrapper = new QueryWrapper<>();
+        countWrapper.eq("file_id", fileId);
+        long totalCount = dataRecordService.count(countWrapper);
+
+        // 2. 初始化列式数据结构
+        Map<String, List<Object>> columnData = new LinkedHashMap<>();
         for (String col : cols) {
-            result.put(col.toUpperCase(), new ArrayList<>());
+            columnData.put(col.toUpperCase(), new ArrayList<>());
         }
-        if (!result.containsKey("DEPTH")) {
-            result.put("DEPTH", new ArrayList<>());
+        if (!columnData.containsKey("DEPTH")) {
+            columnData.put("DEPTH", new ArrayList<>());
         }
 
-        for (LogDataRecord record : list) {
-            if (result.containsKey("DEPTH")) result.get("DEPTH").add(record.getDepth());
+        // 3. 分页加载数据（每页 ECHARTS_MAX_POINTS 条，内存恒定）
+        if (totalCount > 0) {
+            long pageSize = Math.max(ECHARTS_MAX_POINTS, 1);
+            int totalPages = (int) Math.ceil((double) totalCount / pageSize);
 
-            for (String colName : cols) {
-                String colLower = colName.toLowerCase();
-                String upperColName = colName.toUpperCase();
-                
-                if (colLower.equals("depth") || colLower.contains("tvd") || colLower.contains("dep")) {
-                    result.get(upperColName).add(record.getDepth());
-                } else if (colLower.equals("ac")) {
-                    result.get(upperColName).add(record.getAc());
-                } else if (colLower.equals("den")) {
-                    result.get(upperColName).add(record.getDen());
-                } else if (colLower.equals("gr")) {
-                    result.get(upperColName).add(record.getGr());
-                } else if (colLower.equals("sp")) {
-                    result.get(upperColName).add(record.getSp());
-                } else if (colLower.equals("rt")) {
-                    result.get(upperColName).add(record.getRt());
-                } else {
-                    Map<String, Object> extra = record.getExtraJson();
-                    if (extra != null && (extra.containsKey(colName) || extra.containsKey(upperColName) || extra.containsKey(colLower))) {
-                        Object val = extra.get(colName);
-                        if (val == null) val = extra.get(upperColName);
-                        if (val == null) val = extra.get(colLower);
-                        result.get(upperColName).add(val);
-                    } else {
-                        result.get(upperColName).add(null);
+            for (int page = 1; page <= totalPages; page++) {
+                QueryWrapper<LogDataRecord> wrapper = new QueryWrapper<>();
+                wrapper.eq("file_id", fileId).orderByAsc("depth");
+                Page<LogDataRecord> pageParam = new Page<>(page, pageSize);
+                pageParam.setSearchCount(false);
+                Page<LogDataRecord> recordPage = dataRecordService.page(pageParam, wrapper);
+
+                for (LogDataRecord record : recordPage.getRecords()) {
+                    if (columnData.containsKey("DEPTH")) columnData.get("DEPTH").add(record.getDepth());
+                    for (String colName : cols) {
+                        columnData.get(colName.toUpperCase()).add(readRecordValue(record, colName));
                     }
                 }
             }
         }
 
-        return Result.success(result);
+        // 4. 超过阈值时执行 LTTB 降采样
+        List<Object> depthList = columnData.get("DEPTH");
+        if (depthList != null && depthList.size() > ECHARTS_MAX_POINTS) {
+            List<Integer> sampledIndices = lttbSampleIndices(depthList, ECHARTS_MAX_POINTS);
+            Map<String, List<Object>> sampled = new LinkedHashMap<>();
+            for (Map.Entry<String, List<Object>> entry : columnData.entrySet()) {
+                List<Object> src = entry.getValue();
+                List<Object> dst = new ArrayList<>(sampledIndices.size());
+                for (int idx : sampledIndices) {
+                    dst.add(idx < src.size() ? src.get(idx) : null);
+                }
+                sampled.put(entry.getKey(), dst);
+            }
+            columnData = sampled;
+        }
+
+        return Result.success(columnData);
+    }
+
+    /**
+     * LTTB (Largest Triangle Three Buckets) 降采样算法。
+     * 根据深度（Y 轴）值计算最能保留曲线形状的采样索引。
+     *
+     * @param depthValues 深度值列表（作为 Y 轴参考）
+     * @param targetPoints 目标采样点数
+     * @return 选中点的原始索引列表
+     */
+    private List<Integer> lttbSampleIndices(List<Object> depthValues, int targetPoints) {
+        int dataLength = depthValues.size();
+        List<Integer> indices = new ArrayList<>(targetPoints);
+
+        // 始终保留第一个点
+        indices.add(0);
+
+        // 将数据分成 (targetPoints - 2) 个桶，每个桶选一个最优点
+        double bucketSize = (double) (dataLength - 2) / (targetPoints - 2);
+        int prevSelected = 0;
+
+        for (int i = 0; i < targetPoints - 2; i++) {
+            int bucketStart = (int) Math.floor((i + 1) * bucketSize) + 1;
+            int bucketEnd = Math.min((int) Math.floor((i + 2) * bucketSize) + 1, dataLength);
+
+            // 计算下一个桶的平均值（用于三角形面积计算）
+            int nextBucketStart = (int) Math.floor((i + 2) * bucketSize) + 1;
+            int nextBucketEnd = Math.min((int) Math.floor((i + 3) * bucketSize) + 1, dataLength);
+            if (i == targetPoints - 3) {
+                nextBucketStart = dataLength - 1;
+                nextBucketEnd = dataLength;
+            }
+
+            double avgDepth = 0;
+            int nextCount = 0;
+            for (int j = nextBucketStart; j < nextBucketEnd; j++) {
+                double d = toDouble(depthValues.get(j));
+                if (Double.isFinite(d)) {
+                    avgDepth += d;
+                    nextCount++;
+                }
+            }
+            if (nextCount > 0) avgDepth /= nextCount;
+
+            // 在当前桶中找到与上一个选中点和下一个桶平均值形成最大三角形的点
+            double prevDepth = toDouble(depthValues.get(prevSelected));
+            double maxArea = -1;
+            int bestIdx = bucketStart;
+
+            for (int j = bucketStart; j < bucketEnd; j++) {
+                double d = toDouble(depthValues.get(j));
+                // 三角形面积 = 0.5 * |x0(y1-y2) + x1(y2-y0) + x2(y0-y1)|
+                // 用索引作为 X 轴，深度值作为 Y 轴
+                double area = Math.abs((prevSelected - avgDepth) * (d - prevDepth)
+                        - (prevSelected - j) * (avgDepth - prevDepth)) * 0.5;
+                if (area > maxArea) {
+                    maxArea = area;
+                    bestIdx = j;
+                }
+            }
+
+            indices.add(bestIdx);
+            prevSelected = bestIdx;
+        }
+
+        // 始终保留最后一个点
+        indices.add(dataLength - 1);
+
+        return indices;
+    }
+
+    /**
+     * 将 Object 安全转为 double，失败返回 NaN
+     */
+    private double toDouble(Object value) {
+        if (value == null) return Double.NaN;
+        if (value instanceof Number) return ((Number) value).doubleValue();
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        } catch (Exception e) {
+            return Double.NaN;
+        }
     }
 }

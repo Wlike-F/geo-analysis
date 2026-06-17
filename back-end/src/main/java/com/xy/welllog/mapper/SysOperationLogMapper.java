@@ -13,8 +13,10 @@ public interface SysOperationLogMapper extends BaseMapper<SysOperationLog> {
 
     @Select("<script>" +
             "SELECT " +
-            "COALESCE(SUM(CASE WHEN module IN ('文件加载', '确认上传', '文件预载', '文件扫描', '系统初始化') THEN file_count ELSE 0 END), 0) as totalFiles, " +
-            "COALESCE(SUM(CASE WHEN module IN ('文件加载', '确认上传', '文件预载', '文件扫描', '系统初始化') THEN line_count ELSE 0 END), 0) as totalLines, " +
+            "COALESCE((SELECT COUNT(*) FROM log_file_info WHERE status != 2" +
+            "  <if test='userId != null'> AND user_id = #{userId}</if>), 0) as totalFiles, " +
+            "COALESCE((SELECT SUM(total_rows) FROM log_file_info WHERE status != 2" +
+            "  <if test='userId != null'> AND user_id = #{userId}</if>), 0) as totalLines, " +
             "COALESCE(SUM(CASE WHEN module IN ('报表导出', '文件导出') THEN 1 ELSE 0 END), 0) as totalExports " +
             "FROM sys_operation_log " +
             "<where>" +

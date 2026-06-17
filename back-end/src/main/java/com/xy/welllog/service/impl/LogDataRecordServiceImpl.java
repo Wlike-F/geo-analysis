@@ -1,11 +1,8 @@
 package com.xy.welllog.service.impl;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.xy.welllog.entity.LogDataRecord;
-import com.xy.welllog.entity.SysColumnMapping;
 import com.xy.welllog.mapper.LogDataRecordMapper;
 import com.xy.welllog.service.LogDataRecordService;
-import com.xy.welllog.service.SysColumnMappingService;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
@@ -15,34 +12,11 @@ import java.util.regex.Pattern;
 @Service
 public class LogDataRecordServiceImpl extends ServiceImpl<LogDataRecordMapper, LogDataRecord> implements LogDataRecordService {
 
-    @Autowired
-    private SysColumnMappingService mappingService;
-
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void processAndSaveBatch(Long fileId, List<String> columns, List<Map<String, Object>> parsedData) {
-        // 加载字典规则并编译为正则表达式
-        List<SysColumnMapping> rules = mappingService.list();
-        Map<String, Pattern> compiledRules = new HashMap<>();
-
-        for (SysColumnMapping rule : rules) {
-            String ruleStr = rule.getStandardKey().toLowerCase();
-            String alias = rule.getAliasList();
-            String standardName = rule.getStandardName();
-            
-            StringBuilder regexBuilder = new StringBuilder();
-            regexBuilder.append("^(").append(rule.getStandardKey());
-            if (standardName != null && !standardName.isEmpty()) {
-                regexBuilder.append("|").append(standardName);
-            }
-            if (alias != null && !alias.trim().isEmpty()) {
-                regexBuilder.append("|").append(alias.replace(",", "|"));
-            }
-            regexBuilder.append(")$");
-            
-            compiledRules.put(ruleStr, Pattern.compile(regexBuilder.toString(), Pattern.CASE_INSENSITIVE));
-        }
-
+    public void processAndSaveBatch(Long fileId, List<String> columns,
+                                    List<Map<String, Object>> parsedData,
+                                    Map<String, Pattern> compiledRules) {
         List<LogDataRecord> batchList = new ArrayList<>();
         for (Map<String, Object> map : parsedData) {
             LogDataRecord record = new LogDataRecord();

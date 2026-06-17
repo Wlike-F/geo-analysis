@@ -6,3 +6,10 @@ export function getDashboardStats() {
     method: 'get'
   })
 }
+
+export function getRecentFiles() {
+  return request({
+    url: '/dashboard/recentFiles',
+    method: 'get'
+  })
+}

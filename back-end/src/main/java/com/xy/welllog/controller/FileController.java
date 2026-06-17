@@ -13,10 +13,12 @@ import com.xy.welllog.entity.LogFileInfo;
 import com.xy.welllog.entity.SysUser;
 import com.xy.welllog.service.*;
 import com.xy.welllog.utils.JwtUtils;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.util.StringUtils;
@@ -52,10 +54,34 @@ public class FileController {
     private final LogFileParseService logFileParseService;
     private final JdbcTemplate jdbcTemplate;
 
-    private static final String UPLOAD_DIR = "E:\\Others\\upload"; // 主目录
-    private static final String UPLOAD_DIR_TO = "C:\\project-upload"; // 备用目录
-    // 改为 Linux 服务器上的绝对路径
-    // private static final String UPLOAD_DIR = "/www/wwwroot/xy/upload";
+    @Value("${app.upload.dirs}")
+    private List<String> uploadDirs;
+
+    /** 启动时解析出第一个可用的上传目录 */
+    private String resolvedUploadDir;
+
+    @PostConstruct
+    public void initUploadDir() {
+        for (String dir : uploadDirs) {
+            if (FileUtil.exist(dir) || FileUtil.mkdir(dir) != null) {
+                resolvedUploadDir = dir;
+                log.info("上传目录已就绪: {}", dir);
+                return;
+            }
+            log.warn("上传目录不可用，尝试下一个: {}", dir);
+        }
+        log.error("所有配置的上传目录均不可用: {}", uploadDirs);
+    }
+
+    /** 获取可用上传目录，运行时动态检查（防止运行中目录失效） */
+    private String getUploadDir() {
+        if (resolvedUploadDir != null && FileUtil.exist(resolvedUploadDir)) {
+            return resolvedUploadDir;
+        }
+        // 运行时主目录失效，重新扫描
+        initUploadDir();
+        return resolvedUploadDir;
+    }
 
     private Long getUserId(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
@@ -82,24 +108,14 @@ public class FileController {
             return Result.failed("文件内容为空");
         }
         try {
-            // 如果目录不存在，创建目录UPLOAD_DIR，创建失败的话
-            // 启用临时目录UPLOAD_DIR_TO，UPLOAD_DIR_TO目录不存在则创建
-            if (!FileUtil.exist(UPLOAD_DIR)) {
-                boolean created = FileUtil.mkdir(UPLOAD_DIR) != null;
-                if (!created || !FileUtil.exist(UPLOAD_DIR)) {
-                    log.warn("主上传目录 [{}] 创建失败，启用备用目录 [{}]", UPLOAD_DIR, UPLOAD_DIR_TO);
-                    if (!FileUtil.exist(UPLOAD_DIR_TO)) {
-                        boolean backupCreated = FileUtil.mkdir(UPLOAD_DIR_TO) != null;
-                        if (!backupCreated || !FileUtil.exist(UPLOAD_DIR_TO)) {
-                            log.error("备用上传目录 [{}] 也创建失败", UPLOAD_DIR_TO);
-                            return Result.failed("文件上传目录不可用");
-                        }
-                    }
-                }
+            String uploadDir = getUploadDir();
+            if (uploadDir == null) {
+                return Result.failed("文件上传目录不可用，请检查配置");
             }
+
             String originalFileName = file.getOriginalFilename();
             String tempName = UUID.randomUUID() + "_" + originalFileName;
-            File destTempFile = new File(UPLOAD_DIR, tempName);
+            File destTempFile = new File(uploadDir, tempName);
             file.transferTo(destTempFile);
 
             // 调用同步预览服务
@@ -319,45 +335,69 @@ public class FileController {
             columns = cn.hutool.json.JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
         }
 
-        LambdaQueryWrapper<LogDataRecord> wrapper = new LambdaQueryWrapper<>();
-        wrapper.eq(LogDataRecord::getFileId, id);
-        List<LogDataRecord> records = dataRecordService.list(wrapper);
+        // --- 用 SQL 聚合代替全量加载 ---
 
-        Map<String, ColumnReport> statsMap = new LinkedHashMap<>();
-        for (String col : columns) {
-            if (isWellNameColumn(col)) {
-                continue;
+        // 1. 总记录数
+        Long recordCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM log_data_records WHERE file_id = ?", Long.class, id);
+        recordCount = recordCount != null ? recordCount : 0L;
+
+        // 2. 核心列聚合统计（排除哨兵值 -9999, -999.25, -999）
+        String sentinelFilter = "(col IS NOT NULL AND col != -9999 AND col != -999.25 AND col != -999)";
+        Map<String, Map<String, Object>> sqlStats = new LinkedHashMap<>();
+        String[] coreCols = {"depth", "ac", "den", "gr", "sp", "rt"};
+
+        StringBuilder sql = new StringBuilder("SELECT ");
+        List<String> selectParts = new ArrayList<>();
+        for (String col : coreCols) {
+            String cond = sentinelFilter.replace("col", col);
+            selectParts.add("SUM(CASE WHEN " + cond + " THEN 1 ELSE 0 END) AS " + col + "_valid");
+            selectParts.add("SUM(CASE WHEN " + cond + " THEN 0 ELSE 1 END) AS " + col + "_invalid");
+            selectParts.add("MIN(CASE WHEN " + cond + " THEN " + col + " END) AS " + col + "_min");
+            selectParts.add("MAX(CASE WHEN " + cond + " THEN " + col + " END) AS " + col + "_max");
+        }
+        sql.append(String.join(", ", selectParts));
+        sql.append(" FROM log_data_records WHERE file_id = ?");
+
+        try {
+            Map<String, Object> row = jdbcTemplate.queryForMap(sql.toString(), id);
+            for (String col : coreCols) {
+                Map<String, Object> stat = new HashMap<>();
+                stat.put("valid", toLong(row.get(col + "_valid")));
+                stat.put("invalid", toLong(row.get(col + "_invalid")));
+                stat.put("min", toDouble(row.get(col + "_min")));
+                stat.put("max", toDouble(row.get(col + "_max")));
+                sqlStats.put(col, stat);
             }
-            statsMap.put(col, new ColumnReport(col));
+        } catch (Exception e) {
+            log.warn("解析报告SQL聚合查询异常", e);
         }
 
-        int invalidValueCount = 0;
+        // 3. 构建列统计结果
+        Map<String, ColumnReport> statsMap = new LinkedHashMap<>();
+        int totalInvalidCount = 0;
         Double depthMin = null;
         Double depthMax = null;
 
-        for (LogDataRecord record : records) {
-            for (String col : columns) {
-                if (isWellNameColumn(col)) {
-                    continue;
-                }
-                ColumnReport report = statsMap.get(col);
-                Object value = readRecordValue(record, col);
-                Double numericValue = toValidReportNumber(value);
-                if (numericValue == null) {
-                    report.invalidCount++;
-                    invalidValueCount++;
-                    continue;
-                }
+        for (String col : columns) {
+            if (isWellNameColumn(col)) continue;
+            ColumnReport report = new ColumnReport(col);
+            String mappedCol = getMappedCoreColumn(col);
 
-                report.validCount++;
-                report.min = report.min == null ? numericValue : Math.min(report.min, numericValue);
-                report.max = report.max == null ? numericValue : Math.max(report.max, numericValue);
+            if (mappedCol != null && sqlStats.containsKey(mappedCol)) {
+                Map<String, Object> stat = sqlStats.get(mappedCol);
+                report.validCount = toLong(stat.get("valid"));
+                report.invalidCount = toLong(stat.get("invalid"));
+                report.min = toDouble(stat.get("min"));
+                report.max = toDouble(stat.get("max"));
+                totalInvalidCount += report.invalidCount;
 
                 if (isDepthColumn(col)) {
-                    depthMin = depthMin == null ? numericValue : Math.min(depthMin, numericValue);
-                    depthMax = depthMax == null ? numericValue : Math.max(depthMax, numericValue);
+                    depthMin = report.min;
+                    depthMax = report.max;
                 }
             }
+            statsMap.put(col, report);
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -365,16 +405,43 @@ public class FileController {
         result.put("fileName", fileInfo.getFileName());
         result.put("status", fileInfo.getStatus());
         result.put("totalRows", fileInfo.getTotalRows());
-        result.put("recordCount", records.size());
+        result.put("recordCount", recordCount);
         result.put("columns", columns);
         result.put("columnCount", columns.size());
         result.put("depthMin", depthMin);
         result.put("depthMax", depthMax);
-        result.put("invalidValueCount", invalidValueCount);
+        result.put("invalidValueCount", totalInvalidCount);
         result.put("dirtyLineCount", countDirtyLines(id));
         result.put("columnStats", new ArrayList<>(statsMap.values()));
 
         return Result.success(result);
+    }
+
+    /** 将列名映射到核心数据库列名，非核心列返回 null */
+    private String getMappedCoreColumn(String colName) {
+        if (colName == null) return null;
+        String lower = colName.trim().toLowerCase();
+        if (lower.equals("depth") || lower.contains("tvd") || lower.contains("dep") || lower.contains("深")) return "depth";
+        switch (lower) {
+            case "ac": return "ac";
+            case "den": return "den";
+            case "gr": return "gr";
+            case "sp": return "sp";
+            case "rt": return "rt";
+            default: return null;
+        }
+    }
+
+    private long toLong(Object val) {
+        if (val == null) return 0L;
+        if (val instanceof Number) return ((Number) val).longValue();
+        try { return Long.parseLong(String.valueOf(val)); } catch (Exception e) { return 0L; }
+    }
+
+    private Double toDouble(Object val) {
+        if (val == null) return null;
+        if (val instanceof Number) return ((Number) val).doubleValue();
+        try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return null; }
     }
 
     private Object readRecordValue(LogDataRecord record, String colName) {
