@@ -29,8 +29,4 @@ jwt:
 # 文件上传目录（按顺序尝试，第一个可用的就用）
 app:
   upload:
-    dirs:
-      - E:\Others\upload
-      - D:\project-upload
-      - C:\project-upload
-      # Linux: - /www/wwwroot/xy/upload
+    dirs: E:\Others\upload,D:\project-upload,C:\project-upload
