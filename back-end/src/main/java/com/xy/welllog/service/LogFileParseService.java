@@ -72,9 +72,10 @@ public class LogFileParseService {
                     public void doAfterAllAnalysed(AnalysisContext context) { /* 读取完毕 */ }
                 }).sheet().headRowNumber(0).doRead();
             } else {
-                // TXT: GBK 编码流式读取
+                // TXT: 自动检测编码 + 流式读取
+                Charset txtCharset = detectFileEncoding(file);
                 try (BufferedReader br = new BufferedReader(
-                        new InputStreamReader(new FileInputStream(file), "GBK"))) {
+                        new InputStreamReader(new FileInputStream(file), txtCharset))) {
                     String line;
                     while ((line = br.readLine()) != null) {
                         if (!line.trim().isEmpty()) {
@@ -322,8 +323,8 @@ public class LogFileParseService {
                 }).sheet().headRowNumber(0).doRead();
 
             } else {
-                // CSV/TXT: BufferedReader 流式逐行读取
-                Charset charset = isCsv ? detectFileEncoding(file) : Charset.forName("GBK");
+                // CSV/TXT: BufferedReader 流式逐行读取，自动检测编码
+                Charset charset = detectFileEncoding(file);
                 try (BufferedReader br = new BufferedReader(
                         new InputStreamReader(new FileInputStream(file), charset))) {
                     String line;

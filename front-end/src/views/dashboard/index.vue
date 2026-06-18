@@ -186,7 +186,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onActivated, ref } from 'vue'
 import { useUserStore } from '@/store/user'
 import { getDashboardStats, getRecentFiles } from '@/api/dashboard'
 import {
@@ -280,6 +280,12 @@ const statusColorClass = computed(() => {
 })
 
 onMounted(() => {
+  fetchStats()
+  fetchFiles()
+})
+
+// 从其他页面切回时自动刷新（keep-alive 触发）
+onActivated(() => {
   fetchStats()
   fetchFiles()
 })
