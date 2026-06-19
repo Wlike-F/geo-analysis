@@ -29,3 +29,11 @@ export function cleanupCache() {
     method: 'post'
   })
 }
+
+export function getRuntimeLogs(params) {
+  return request({
+    url: '/sys/log/runtime',
+    method: 'get',
+    params
+  })
+}

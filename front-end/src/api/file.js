@@ -107,3 +107,46 @@ export function clearFiles() {
   })
 }
 
+// ==================== 地质分层配置 ====================
+
+export function getFileLayers(fileId) {
+  return request({
+    url: `/file/${fileId}/layers`,
+    method: 'get'
+  })
+}
+
+export function saveFileLayers(fileId, layers) {
+  return request({
+    url: `/file/${fileId}/layers`,
+    method: 'post',
+    data: layers
+  })
+}
+
+export function deleteFileLayers(fileId) {
+  return request({
+    url: `/file/${fileId}/layers`,
+    method: 'delete'
+  })
+}
+
+export function copyLayersToFiles(sourceFileId, targetFileIds) {
+  return request({
+    url: `/file/${sourceFileId}/layers/copy`,
+    method: 'post',
+    data: targetFileIds
+  })
+}
+
+export function importLayersFromExcel(fileId, formData, wellName) {
+  const params = wellName ? { wellName } : {}
+  return request({
+    url: `/file/${fileId}/layers/import`,
+    method: 'post',
+    data: formData,
+    params,
+    headers: { 'Content-Type': 'multipart/form-data' }
+  })
+}
+

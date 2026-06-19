@@ -16,6 +16,8 @@ import com.xy.welllog.service.LogDataRecordService;
 import com.xy.welllog.service.LogFileInfoService;
 import com.xy.welllog.service.SysOperationLogService;
 import com.xy.welllog.service.SysUserService;
+import com.xy.welllog.service.WellLayerService;
+import com.xy.welllog.entity.WellLayer;
 import com.xy.welllog.utils.JwtUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -47,6 +49,9 @@ public class LogDataController {
 
     @Autowired
     private JwtUtils jwtUtils;
+
+    @Autowired
+    private WellLayerService wellLayerService;
 
     /** 每批导出行数（受限于 MybatisPlus 分页上限 10000） */
     private static final int EXPORT_BATCH_SIZE = 10000;
@@ -182,6 +187,12 @@ public class LogDataController {
                     for (String col : cols) {
                         head.add(Collections.singletonList(col));
                     }
+                    // 如果有分层配置，追加“层位”列头
+                    long layerCount = wellLayerService.count(
+                            new LambdaQueryWrapper<WellLayer>().eq(WellLayer::getFileId, query.getFileId()));
+                    if (layerCount > 0) {
+                        head.add(Collections.singletonList("层位"));
+                    }
                     ExcelWriter excelWriter = EasyExcel.write(zos).head(head).autoCloseStream(Boolean.FALSE).build();
                     WriteSheet writeSheet = EasyExcel.writerSheet("Filtered Data").build();
 
@@ -218,6 +229,12 @@ public class LogDataController {
             List<List<String>> head = new ArrayList<>();
             for (String col : cols) {
                 head.add(Collections.singletonList(col));
+            }
+            // 如果有分层配置，追加“层位”列头
+            long layerCount = wellLayerService.count(
+                    new LambdaQueryWrapper<WellLayer>().eq(WellLayer::getFileId, fileId));
+            if (layerCount > 0) {
+                head.add(Collections.singletonList("层位"));
             }
 
             try (ExcelWriter excelWriter = EasyExcel.write(response.getOutputStream()).head(head).build()) {
@@ -279,6 +296,13 @@ public class LogDataController {
      */
     private long streamWriteData(ExcelWriter writer, WriteSheet sheet, Long fileId,
                                  LogDataQueryDTO query, List<String> cols) {
+        // 一次性加载该文件的分层配置
+        List<WellLayer> layers = wellLayerService.list(
+                new LambdaQueryWrapper<WellLayer>()
+                        .eq(WellLayer::getFileId, fileId)
+                        .orderByAsc(WellLayer::getTopDepth));
+        boolean hasLayers = layers != null && !layers.isEmpty();
+
         long totalWritten = 0;
         int currentPage = 1;
 
@@ -294,9 +318,14 @@ public class LogDataController {
 
             List<List<Object>> rows = new ArrayList<>(records.size());
             for (LogDataRecord record : records) {
-                List<Object> row = new ArrayList<>(cols.size());
+                List<Object> row = new ArrayList<>(cols.size() + (hasLayers ? 1 : 0));
                 for (String colName : cols) {
                     row.add(readRecordValue(record, colName));
+                }
+                // 如果有分层配置，根据 depth 匹配层名
+                if (hasLayers) {
+                    String layerName = matchLayerFromList(layers, record.getDepth());
+                    row.add(layerName != null ? layerName : "");
                 }
                 rows.add(row);
             }
@@ -309,6 +338,21 @@ public class LogDataController {
         }
 
         return totalWritten;
+    }
+
+    /**
+     * 从分层列表中根据深度匹配层名
+     */
+    private String matchLayerFromList(List<WellLayer> layers, java.math.BigDecimal depth) {
+        if (depth == null || layers == null) return null;
+        for (WellLayer layer : layers) {
+            if (layer.getTopDepth() != null && layer.getBottomDepth() != null
+                    && depth.compareTo(layer.getTopDepth()) >= 0
+                    && depth.compareTo(layer.getBottomDepth()) < 0) {
+                return layer.getLayerName();
+            }
+        }
+        return null;
     }
 
     /**

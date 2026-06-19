@@ -11,6 +11,7 @@ import com.xy.welllog.dto.ConfirmUploadDTO;
 import com.xy.welllog.entity.LogDataRecord;
 import com.xy.welllog.entity.LogFileInfo;
 import com.xy.welllog.entity.SysUser;
+import com.xy.welllog.entity.WellLayer;
 import com.xy.welllog.service.*;
 import com.xy.welllog.utils.JwtUtils;
 import jakarta.annotation.PostConstruct;
@@ -31,6 +32,7 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.zip.ZipOutputStream;
@@ -52,6 +54,7 @@ public class FileController {
     private final JwtUtils jwtUtils;
     private final SysColumnMappingService mappingService;
     private final LogFileParseService logFileParseService;
+    private final WellLayerService wellLayerService;
     private final JdbcTemplate jdbcTemplate;
 
     @Value("${app.upload.dirs}")
@@ -561,5 +564,388 @@ public class FileController {
         fileInfoService.updateById(fileInfo);
         operationLogService.recordLog("文件管理", "删除文件 [" + fileInfo.getFileName() + "]", 1, null, userId);
         return Result.success("删除成功");
+    }
+
+    // ==================== 地质分层配置 ====================
+
+    @GetMapping("/{id}/layers")
+    public Result<List<WellLayer>> getLayers(@PathVariable Long id, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        LogFileInfo fileInfo = fileInfoService.getById(id);
+        if (fileInfo == null || !fileInfo.getUserId().equals(userId)) {
+            return Result.failed("文件不存在或无权访问");
+        }
+        LambdaQueryWrapper<WellLayer> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WellLayer::getFileId, id)
+               .orderByAsc(WellLayer::getTopDepth);
+        return Result.success(wellLayerService.list(wrapper));
+    }
+
+    @PostMapping("/{id}/layers")
+    public Result<String> saveLayers(@PathVariable Long id, @RequestBody List<WellLayer> layers, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        LogFileInfo fileInfo = fileInfoService.getById(id);
+        if (fileInfo == null || !fileInfo.getUserId().equals(userId)) {
+            return Result.failed("文件不存在或无权操作");
+        }
+        // 全量覆盖：先删后插
+        LambdaQueryWrapper<WellLayer> deleteWrapper = new LambdaQueryWrapper<>();
+        deleteWrapper.eq(WellLayer::getFileId, id);
+        wellLayerService.remove(deleteWrapper);
+
+        if (layers != null && !layers.isEmpty()) {
+            layers.removeIf(java.util.Objects::isNull);
+            for (WellLayer layer : layers) {
+                layer.setId(null);
+                layer.setFileId(id);
+                layer.setCreateTime(new Date());
+            }
+            if (!layers.isEmpty()) {
+                wellLayerService.saveBatch(layers);
+            }
+        }
+        operationLogService.recordLog("分层配置", "保存分层配置 [" + fileInfo.getFileName() + "] " + (layers != null ? layers.size() : 0) + " 层", 1, null, userId);
+        return Result.success("分层配置保存成功");
+    }
+
+    @DeleteMapping("/{id}/layers")
+    public Result<String> deleteLayers(@PathVariable Long id, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        LogFileInfo fileInfo = fileInfoService.getById(id);
+        if (fileInfo == null || !fileInfo.getUserId().equals(userId)) {
+            return Result.failed("文件不存在或无权操作");
+        }
+        LambdaQueryWrapper<WellLayer> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(WellLayer::getFileId, id);
+        wellLayerService.remove(wrapper);
+        return Result.success("分层配置已清空");
+    }
+
+    // ==================== 跨文件复制分层 ====================
+
+    @PostMapping("/{id}/layers/copy")
+    public Result<String> copyLayersToFiles(@PathVariable Long id,
+                                             @RequestBody List<Long> targetFileIds,
+                                             HttpServletRequest request) {
+        Long userId = getUserId(request);
+        LogFileInfo sourceFile = fileInfoService.getById(id);
+        if (sourceFile == null || !sourceFile.getUserId().equals(userId)) {
+            return Result.failed("源文件不存在或无权操作");
+        }
+        if (targetFileIds == null || targetFileIds.isEmpty()) {
+            return Result.failed("请选择目标文件");
+        }
+
+        // 获取源文件的分层配置
+        List<WellLayer> sourceLayers = wellLayerService.list(
+                new LambdaQueryWrapper<WellLayer>()
+                        .eq(WellLayer::getFileId, id)
+                        .orderByAsc(WellLayer::getTopDepth));
+        if (sourceLayers == null || sourceLayers.isEmpty()) {
+            return Result.failed("源文件没有分层配置可复制");
+        }
+
+        int copiedCount = 0;
+        for (Long targetId : targetFileIds) {
+            if (targetId.equals(id)) continue;
+            LogFileInfo targetFile = fileInfoService.getById(targetId);
+            if (targetFile == null || !targetFile.getUserId().equals(userId)) continue;
+
+            // 先删除目标文件已有的分层
+            wellLayerService.remove(new LambdaQueryWrapper<WellLayer>()
+                    .eq(WellLayer::getFileId, targetId));
+
+            // 复制源文件分层到目标文件
+            List<WellLayer> copies = new ArrayList<>();
+            for (WellLayer src : sourceLayers) {
+                WellLayer copy = new WellLayer();
+                copy.setFileId(targetId);
+                copy.setLayerName(src.getLayerName());
+                copy.setTopDepth(src.getTopDepth());
+                copy.setBottomDepth(src.getBottomDepth());
+                copy.setRemark(src.getRemark());
+                copy.setCreateTime(new Date());
+                copies.add(copy);
+            }
+            wellLayerService.saveBatch(copies);
+            copiedCount++;
+        }
+
+        operationLogService.recordLog("分层配置", "复制分层 [" + sourceFile.getFileName() + "] 到 " + copiedCount + " 个文件", copiedCount, null, userId);
+        return Result.success("已复制分层配置到 " + copiedCount + " 个文件");
+    }
+
+    // ==================== 文件导入分层（支持 Excel/CSV/TXT） ====================
+
+    @PostMapping("/{id}/layers/import")
+    public Result<?> importLayersFromExcel(@PathVariable Long id,
+                                             @RequestParam("file") MultipartFile file,
+                                             @RequestParam(value = "wellName", required = false) String selectedWellName,
+                                             HttpServletRequest request) {
+        Long userId = getUserId(request);
+        LogFileInfo fileInfo = fileInfoService.getById(id);
+        if (fileInfo == null || !fileInfo.getUserId().equals(userId)) {
+            return Result.failed("文件不存在或无权操作");
+        }
+
+        if (file.isEmpty()) {
+            return Result.failed("文件内容为空");
+        }
+
+        try {
+            // 根据文件类型选择不同的读取方式
+            String originalFilename = file.getOriginalFilename();
+            String ext = originalFilename != null && originalFilename.contains(".")
+                    ? originalFilename.substring(originalFilename.lastIndexOf('.') + 1).toLowerCase() : "xlsx";
+
+            List<Map<Integer, String>> rows;
+            if (ext.equals("txt") || ext.equals("csv")) {
+                // TXT/CSV文件：手动解析（检测编码 + 自动检测分隔符）
+                rows = parseTxtToRows(file);
+            } else {
+                // Excel文件：用EasyExcel默认读取
+                rows = com.alibaba.excel.EasyExcel.read(file.getInputStream())
+                        .sheet().headRowNumber(0).doReadSync();
+            }
+
+            if (rows == null || rows.isEmpty()) {
+                return Result.failed("文件内容为空");
+            }
+
+            // 智能识别列位置：从第一行（表头）中查找层名/顶深/底深/井名列
+            Map<Integer, String> headerRow = rows.get(0);
+            int layerColIdx = -1;
+            int topColIdx = -1;
+            int bottomColIdx = -1;
+            int remarkColIdx = -1;
+            int wellNameColIdx = -1;
+
+            for (Map.Entry<Integer, String> entry : headerRow.entrySet()) {
+                String headerVal = entry.getValue() != null ? entry.getValue().trim().toLowerCase() : "";
+                int idx = entry.getKey();
+
+                // 井名列：包含"井"或"well"
+                if ((headerVal.contains("井") || headerVal.contains("well")) && wellNameColIdx == -1) {
+                    wellNameColIdx = idx;
+                }
+                // 层位列：包含"层"字或"layer"
+                else if ((headerVal.contains("层") || headerVal.contains("layer")) && layerColIdx == -1) {
+                    layerColIdx = idx;
+                }
+                // 顶深列：包含"顶"或"top"
+                else if ((headerVal.contains("顶") || headerVal.contains("top")) && topColIdx == -1) {
+                    topColIdx = idx;
+                }
+                // 底深列：包含"底"或"bottom"
+                else if ((headerVal.contains("底") || headerVal.contains("bottom")) && bottomColIdx == -1) {
+                    bottomColIdx = idx;
+                }
+                // 备注列：包含"备注"或"remark"
+                else if ((headerVal.contains("备注") || headerVal.contains("remark")) && remarkColIdx == -1) {
+                    remarkColIdx = idx;
+                }
+            }
+
+            // 如果没识别到关键列，尝试简单格式（3列：层名/顶深/底深）
+            if (layerColIdx == -1 && topColIdx == -1 && bottomColIdx == -1) {
+                if (headerRow.size() >= 3) {
+                    layerColIdx = 0;
+                    topColIdx = 1;
+                    bottomColIdx = 2;
+                    if (headerRow.size() > 3) remarkColIdx = 3;
+                    log.info("Excel未识别到表头关键词，使用简单3列格式：层名/顶深/底深");
+                } else {
+                    return Result.failed("无法识别Excel列结构，请确保表头包含'层'、'顶'、'底'关键词，或使用3列格式（层名/顶深/底深）");
+                }
+            }
+
+            if (layerColIdx == -1 || topColIdx == -1 || bottomColIdx == -1) {
+                return Result.failed("未能识别完整列结构，需要层名列、顶深列、底深列");
+            }
+
+            log.info("Excel列识别结果：井名=列{}, 层名=列{}, 顶深=列{}, 底深=列{}, 备注=列{}",
+                    wellNameColIdx, layerColIdx, topColIdx, bottomColIdx, remarkColIdx);
+
+            // 井名预筛选：如果识别到井名列，收集所有井名并尝试自动匹配
+            String filterWellName = null;
+            if (wellNameColIdx >= 0) {
+                Set<String> wellNames = new LinkedHashSet<>();
+                for (int i = 1; i < rows.size(); i++) {
+                    Map<Integer, String> row = rows.get(i);
+                    String wn = getStringValue(row, wellNameColIdx);
+                    if (wn != null && !wn.isEmpty()) wellNames.add(wn.trim());
+                }
+
+                if (wellNames.size() > 1) {
+                    // 多个井名，尝试用当前文件名自动匹配
+                    String currentFileName = fileInfo.getFileName();
+                    String fileNameNoExt = currentFileName.contains(".") ?
+                            currentFileName.substring(0, currentFileName.lastIndexOf('.')) : currentFileName;
+
+                    if (selectedWellName != null && !selectedWellName.isEmpty()) {
+                        // 前端指定了井名
+                        filterWellName = selectedWellName;
+                    } else {
+                        // 尝试自动匹配：文件名包含井名 或 井名包含文件名
+                        for (String wn : wellNames) {
+                            if (fileNameNoExt.contains(wn) || wn.contains(fileNameNoExt)
+                                    || fileNameNoExt.toLowerCase().contains(wn.toLowerCase())
+                                    || wn.toLowerCase().contains(fileNameNoExt.toLowerCase())) {
+                                filterWellName = wn;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (filterWellName == null) {
+                        // 自动匹配失败，返回井名列表让前端选择
+                        Map<String, Object> result = new LinkedHashMap<>();
+                        result.put("needSelectWell", true);
+                        result.put("wellNames", new ArrayList<>(wellNames));
+                        result.put("currentFileName", currentFileName);
+                        return Result.success(result, "Excel包含多口井数据，请选择井名后重新导入");
+                    }
+                    log.info("井名自动匹配成功: {} -> {}", fileInfo.getFileName(), filterWellName);
+                } else if (wellNames.size() == 1) {
+                    filterWellName = wellNames.iterator().next();
+                    log.info("Excel仅包含一口井: {}", filterWellName);
+                }
+            }
+
+            List<WellLayer> layers = new ArrayList<>();
+            // 从第二行开始读数据（第一行是表头）
+            for (int i = 1; i < rows.size(); i++) {
+                Map<Integer, String> row = rows.get(i);
+                if (row == null || row.isEmpty()) continue;
+
+                // 井名过滤：如果指定了井名，只导入匹配的井
+                if (filterWellName != null && wellNameColIdx >= 0) {
+                    String rowWellName = getStringValue(row, wellNameColIdx);
+                    if (rowWellName == null || !rowWellName.equals(filterWellName)) continue;
+                }
+
+                String layerName = getStringValue(row, layerColIdx);
+                String topStr = getStringValue(row, topColIdx);
+                String bottomStr = getStringValue(row, bottomColIdx);
+                String remark = remarkColIdx >= 0 ? getStringValue(row, remarkColIdx) : "";
+
+                if (layerName == null || layerName.isEmpty()) continue;
+
+                try {
+                    java.math.BigDecimal topDepth = topStr != null && !topStr.isEmpty() ? new java.math.BigDecimal(topStr.trim()) : null;
+                    java.math.BigDecimal bottomDepth = bottomStr != null && !bottomStr.isEmpty() ? new java.math.BigDecimal(bottomStr.trim()) : null;
+
+                    WellLayer layer = new WellLayer();
+                    layer.setFileId(id);
+                    layer.setLayerName(layerName.trim());
+                    layer.setTopDepth(topDepth);
+                    layer.setBottomDepth(bottomDepth);
+                    layer.setRemark(remark != null ? remark.trim() : "");
+                    layer.setCreateTime(new Date());
+                    layers.add(layer);
+                } catch (NumberFormatException e) {
+                    log.warn("跳过无效行 {}: topDepth={}, bottomDepth={}", i, topStr, bottomStr);
+                }
+            }
+
+            if (layers.isEmpty()) {
+                return Result.failed("未能从 Excel 中解析出有效的分层数据");
+            }
+
+            // 全量覆盖：先删后插
+            wellLayerService.remove(new LambdaQueryWrapper<WellLayer>().eq(WellLayer::getFileId, id));
+            wellLayerService.saveBatch(layers);
+
+            operationLogService.recordLog("分层配置", "导入分层 [" + fileInfo.getFileName() + "] " + layers.size() + " 层" + (filterWellName != null ? " (井:" + filterWellName + ")" : ""), 1, null, userId);
+            return Result.success("成功导入 " + layers.size() + " 条分层记录" + (filterWellName != null ? " (井:" + filterWellName + ")" : ""));
+        } catch (Exception e) {
+            log.error("文件导入分层失败", e);
+            return Result.failed("文件解析失败，请确认文件格式");
+        }
+    }
+
+    private String getStringValue(Map<Integer, String> row, int index) {
+        String val = row.get(index);
+        return val != null ? val.trim() : null;
+    }
+
+    /**
+     * 检测文件编码（UTF-8 or GBK）
+     */
+    private java.nio.charset.Charset detectFileEncoding(MultipartFile file) {
+        byte[] head = new byte[8192];
+        int bytesRead;
+        try (InputStream is = file.getInputStream()) {
+            bytesRead = is.read(head);
+        } catch (Exception e) {
+            return java.nio.charset.Charset.forName("GBK");
+        }
+        if (bytesRead <= 0) return java.nio.charset.Charset.forName("GBK");
+
+        int start = 0;
+        if (bytesRead >= 3 && head[0] == (byte) 0xEF
+                && head[1] == (byte) 0xBB && head[2] == (byte) 0xBF) {
+            start = 3;
+        }
+
+        boolean hasHighBytes = false;
+        int i = start;
+        while (i < bytesRead) {
+            int b = head[i] & 0xFF;
+            int extraBytes;
+            if (b <= 0x7F) {
+                extraBytes = 0;
+            } else if (b >= 0xC2 && b <= 0xDF) {
+                extraBytes = 1;
+                hasHighBytes = true;
+            } else if (b >= 0xE0 && b <= 0xEF) {
+                extraBytes = 2;
+                hasHighBytes = true;
+            } else if (b >= 0xF0 && b <= 0xF4) {
+                extraBytes = 3;
+                hasHighBytes = true;
+            } else {
+                return java.nio.charset.Charset.forName("GBK");
+            }
+            for (int j = 1; j <= extraBytes; j++) {
+                if (i + j >= bytesRead) return java.nio.charset.Charset.forName("GBK");
+                if ((head[i + j] & 0xC0) != 0x80) return java.nio.charset.Charset.forName("GBK");
+            }
+            i += 1 + extraBytes;
+        }
+
+        return hasHighBytes ? java.nio.charset.StandardCharsets.UTF_8 : java.nio.charset.Charset.forName("GBK");
+    }
+
+    /**
+     * 解析 TXT 文件为行数据（自动检测编码 + 自动检测分隔符）
+     */
+    private List<Map<Integer, String>> parseTxtToRows(MultipartFile file) throws Exception {
+        java.nio.charset.Charset charset = detectFileEncoding(file);
+        String content = new String(file.getBytes(), charset);
+        String[] lines = content.split("\r?\n");
+
+        // 自动检测分隔符：看表头行中包含 \t 还是 ,
+        String delimiter = ",";
+        if (lines.length > 0) {
+            String firstLine = lines[0];
+            long tabCount = firstLine.chars().filter(c -> c == '\t').count();
+            long commaCount = firstLine.chars().filter(c -> c == ',').count();
+            if (tabCount > commaCount) {
+                delimiter = "\t";
+            }
+        }
+
+        List<Map<Integer, String>> rows = new ArrayList<>();
+        for (String line : lines) {
+            if (line.trim().isEmpty()) continue;
+            String[] cols = line.split(delimiter, -1);
+            Map<Integer, String> row = new LinkedHashMap<>();
+            for (int i = 0; i < cols.length; i++) {
+                row.put(i, cols[i].trim());
+            }
+            rows.add(row);
+        }
+        return rows;
     }
 }

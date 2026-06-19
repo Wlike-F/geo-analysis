@@ -187,7 +187,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowDown, Download } from '@element-plus/icons-vue'
-import { exportBatchZipStream, exportFilteredExcel, getFileList, getFilePage, getPageData } from '@/api/file'
+import { exportBatchZipStream, exportFilteredExcel, getFileList, getFilePage, getPageData, getFileLayers } from '@/api/file'
 
 const activeTabName = ref('')
 const tabs = ref([])
@@ -584,9 +584,18 @@ const downloadAnalysisExcel = () => {
     return
   }
 
-  let csvContent = '\uFEFF提取序号,顶深(m),底深(m),厚度(m),数据点数,平均值\n'
+  const hasLayer = analysisResults.value.some(seg => seg.layerName)
+  let csvHeader = hasLayer
+    ? '\uFEFF提取序号,顶深(m),底深(m),厚度(m),层位,数据点数,平均值\n'
+    : '\uFEFF提取序号,顶深(m),底深(m),厚度(m),数据点数,平均值\n'
+
+  let csvContent = csvHeader
   analysisResults.value.forEach((seg, index) => {
-    csvContent += `${index + 1},${seg.startDepth.toFixed(4)},${seg.endDepth.toFixed(4)},${seg.thickness.toFixed(4)},${seg.pointCount},${seg.avgValue.toFixed(4)}\n`
+    if (hasLayer) {
+      csvContent += `${index + 1},${seg.startDepth.toFixed(4)},${seg.endDepth.toFixed(4)},${seg.thickness.toFixed(4)},${seg.layerName || ''},${seg.pointCount},${seg.avgValue.toFixed(4)}\n`
+    } else {
+      csvContent += `${index + 1},${seg.startDepth.toFixed(4)},${seg.endDepth.toFixed(4)},${seg.thickness.toFixed(4)},${seg.pointCount},${seg.avgValue.toFixed(4)}\n`
+    }
   })
 
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -634,6 +643,22 @@ const extractContinuousSegments = async () => {
     return
   }
 
+  // 加载分层配置
+  let layers = []
+  try {
+    layers = (await getFileLayers(currentTab.fileId)) || []
+  } catch (e) {
+    layers = []
+  }
+  layers.sort((a, b) => Number(a.topDepth) - Number(b.topDepth))
+
+  const matchLayer = (depth) => {
+    for (const l of layers) {
+      if (depth >= Number(l.topDepth) && depth < Number(l.bottomDepth)) return l.layerName
+    }
+    return ''
+  }
+
   const depthCol = currentTab.columns.find(col => ['DEPTH', '深度', 'TVD'].includes(col.toUpperCase()) || col.includes('深')) || currentTab.columns[0]
   const pageSize = 5000
   let currentPage = 1
@@ -645,7 +670,7 @@ const extractContinuousSegments = async () => {
   analysisLoading.value = true
   analysisResults.value = []
   analysisResultsEmpty.value = false
-  ElMessage.info('正在分批读取全量序列，请稍候...')
+  ElMessage.info(layers.length > 0 ? '已加载分层配置，正在分批读取并切割跨层段...' : '正在分批读取全量序列，请稍候...')
 
   try {
     while (hasMore && safetyGuard < 1000) {
@@ -673,17 +698,36 @@ const extractContinuousSegments = async () => {
         const isMatch = op === '>=' ? rawValue >= threshold : rawValue <= threshold
 
         if (isMatch) {
+          const currentLayer = layers.length > 0 ? matchLayer(depth) : ''
+
           if (!currentSegment) {
             currentSegment = {
               startDepth: depth,
               endDepth: depth,
               pointCount: 1,
-              sumValue: rawValue
+              sumValue: rawValue,
+              layerName: currentLayer
             }
           } else {
-            currentSegment.endDepth = Math.max(currentSegment.endDepth, depth)
-            currentSegment.pointCount += 1
-            currentSegment.sumValue += rawValue
+            // 检查是否跨越分层边界
+            if (layers.length > 0 && currentSegment.layerName !== currentLayer) {
+              // 关闭当前段
+              if (currentSegment.pointCount >= minPoints) {
+                segments.push(currentSegment)
+              }
+              // 开启新段
+              currentSegment = {
+                startDepth: depth,
+                endDepth: depth,
+                pointCount: 1,
+                sumValue: rawValue,
+                layerName: currentLayer
+              }
+            } else {
+              currentSegment.endDepth = Math.max(currentSegment.endDepth, depth)
+              currentSegment.pointCount += 1
+              currentSegment.sumValue += rawValue
+            }
           }
         } else if (currentSegment) {
           if (currentSegment.pointCount >= minPoints) {
@@ -707,14 +751,16 @@ const extractContinuousSegments = async () => {
       endDepth: seg.endDepth,
       thickness: Math.abs(seg.endDepth - seg.startDepth),
       pointCount: seg.pointCount,
-      avgValue: seg.sumValue / seg.pointCount
+      avgValue: seg.sumValue / seg.pointCount,
+      layerName: seg.layerName || ''
     }))
 
     analysisResultsEmpty.value = analysisResults.value.length === 0
     if (analysisResultsEmpty.value) {
       ElMessage.warning('未发现满足要求的连续异常测段')
     } else {
-      ElMessage.success(`分析完成，共提取 ${analysisResults.value.length} 段连续异常地层`)
+      const layerInfo = layers.length > 0 ? `，跨层段已自动切割` : ''
+      ElMessage.success(`分析完成，共提取 ${analysisResults.value.length} 段连续异常地层${layerInfo}`)
     }
   } catch (error) {
     console.error(error)

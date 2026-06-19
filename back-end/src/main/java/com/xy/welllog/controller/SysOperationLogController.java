@@ -3,6 +3,7 @@ package com.xy.welllog.controller;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.xy.welllog.common.Result;
+import com.xy.welllog.config.InMemoryLogAppender;
 import com.xy.welllog.entity.LogFileInfo;
 import com.xy.welllog.entity.SysOperationLog;
 import com.xy.welllog.entity.SysUser;
@@ -22,6 +23,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -45,6 +47,9 @@ public class SysOperationLogController {
     
     @Autowired
     private JwtUtils jwtUtils;
+
+    @Autowired
+    private InMemoryLogAppender inMemoryLogAppender;
 
     private Long getUserId(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
@@ -195,5 +200,23 @@ public class SysOperationLogController {
         sysOperationLogService.recordLog("系统管理", "执行缓存清理", 0, 0L, userId);
 
         return Result.success(result, "缓存清理完成");
+    }
+
+    /**
+     * 获取后端运行日志（内存环形缓冲，最近 500 条）
+     */
+    @GetMapping("/runtime")
+    public Result<List<InMemoryLogAppender.LogEntry>> getRuntimeLogs(
+            @RequestParam(defaultValue = "ALL") String level,
+            @RequestParam(defaultValue = "200") Integer lines,
+            HttpServletRequest request) {
+
+        Long userId = getUserId(request);
+        if (userId == null) {
+            return Result.failed("用户未登录");
+        }
+
+        List<InMemoryLogAppender.LogEntry> entries = inMemoryLogAppender.getEntries(level, Math.min(lines, 500));
+        return Result.success(entries);
     }
 }

@@ -62,8 +62,9 @@
           </el-table-column>
           <el-table-column label="操作" width="300" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="success" link icon="DocumentChecked" :disabled="row.status !== 1" @click="handleParseReport(row)">文件解析报告</el-button>
+              <el-button size="small" type="success" link icon="DocumentChecked" :disabled="row.status !== 1" @click="handleParseReport(row)">解析报告</el-button>
               <el-button size="small" type="primary" link icon="View" :disabled="row.status !== 1" @click="handlePreview(row)">预览</el-button>
+              <el-button size="small" type="warning" link icon="Menu" :disabled="row.status !== 1" @click="openLayerDialog(row)">分层</el-button>
               <el-button size="small" type="danger" link icon="Delete" :disabled="row.status === 0" @click="handleDelete(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -236,6 +237,115 @@
         </span>
       </template>
     </el-dialog>
+
+    <!-- 地质分层配置 -->
+    <el-dialog v-model="layerDialogVisible" title="地质分层配置" width="720px" top="4vh" class="layer-dialog">
+      <div class="layer-dialog-header">
+        <div class="layer-file-info">
+          <el-icon :size="18" color="var(--el-color-primary)"><Document /></el-icon>
+          <span class="layer-file-name">{{ layerFile.fileName }}</span>
+          <el-tag size="small" type="info" effect="plain">{{ layerFile.totalRows?.toLocaleString() || 0 }} 行</el-tag>
+        </div>
+        <div class="layer-file-desc">配置该井的地层分层深度，导出时自动附加层位列。</div>
+      </div>
+
+      <div class="layer-table-wrapper">
+        <el-table :data="layerRows" size="default" v-loading="layerLoading" :header-cell-style="{ background: '#f8fafc', fontWeight: 600 }">
+          <el-table-column type="index" label="#" width="50" align="center" />
+          <el-table-column label="层位名称" min-width="130">
+            <template #default="{ row }">
+              <el-input v-model="row.layerName" size="default" placeholder="如 盒5" />
+            </template>
+          </el-table-column>
+          <el-table-column label="顶深 (m)" width="140">
+            <template #default="{ row }">
+              <el-input-number v-model="row.topDepth" size="default" :controls="false" :precision="3" placeholder="0" style="width: 100%;" />
+            </template>
+          </el-table-column>
+          <el-table-column label="底深 (m)" width="140">
+            <template #default="{ row }">
+              <el-input-number v-model="row.bottomDepth" size="default" :controls="false" :precision="3" placeholder="0" style="width: 100%;" />
+            </template>
+          </el-table-column>
+          <el-table-column label="备注" min-width="110">
+            <template #default="{ row }">
+              <el-input v-model="row.remark" size="default" placeholder="可选" />
+            </template>
+          </el-table-column>
+          <el-table-column label="" width="50" align="center">
+            <template #default="{ $index }">
+              <el-button type="danger" link size="small" icon="Delete" @click="layerRows.splice($index, 1)" />
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+
+      <div class="layer-actions-bar">
+        <el-button type="primary" icon="Plus" @click="layerRows.push({ layerName: '', topDepth: null, bottomDepth: null, remark: '' })">
+          添加分层
+        </el-button>
+        <el-upload action="#" :show-file-list="false" :http-request="handleLayerExcelImport" accept=".xlsx,.xls,.csv,.txt">
+          <el-button type="success" icon="Upload">从文件导入</el-button>
+        </el-upload>
+        <el-button type="warning" icon="CopyDocument" :disabled="layerRows.length === 0" @click="openCopyLayerDialog">
+          复制到其他文件
+        </el-button>
+        <el-button type="danger" plain icon="Delete" @click="handleClearLayers">
+          清空分层
+        </el-button>
+      </div>
+
+      <template #footer>
+        <div class="layer-dialog-footer">
+          <el-button size="large" @click="layerDialogVisible = false">取消</el-button>
+          <el-button type="primary" size="large" :loading="layerSaving" icon="Check" @click="saveLayerConfig">保存分层配置</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <!-- 复制分层到其他文件 -->
+    <el-dialog v-model="copyLayerDialogVisible" title="复制分层配置到其他文件" width="500px" append-to-body>
+      <div style="margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px;">
+        将 <strong style="color: var(--el-text-color-primary);">{{ layerFile.fileName }}</strong> 的分层配置复制到其他文件。
+        <br>层名会被复制，深度值保持相同，复制后请根据各井实际情况调整深度。
+      </div>
+
+      <el-table
+        ref="copyFileTableRef"
+        :data="copyFileList"
+        border
+        size="small"
+        height="300"
+        @selection-change="handleCopySelectionChange"
+      >
+        <el-table-column type="selection" width="55" />
+        <el-table-column prop="fileName" label="文件名称" show-overflow-tooltip />
+        <el-table-column prop="totalRows" label="数据量" width="100" align="center" />
+      </el-table>
+
+      <template #footer>
+        <span class="dialog-footer">
+          <el-button @click="copyLayerDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="copyLayerLoading" :disabled="copySelectedFiles.length === 0" @click="confirmCopyLayers">
+            复制到 {{ copySelectedFiles.length }} 个文件
+          </el-button>
+        </span>
+      </template>
+    </el-dialog>
+
+    <!-- 井名选择 Dialog -->
+    <el-dialog v-model="wellSelectVisible" title="选择井名" width="400px" append-to-body>
+      <div style="margin-bottom: 16px; color: var(--el-text-color-secondary); font-size: 13px;">
+        Excel 中包含多口井的数据，请选择要导入的井名：
+      </div>
+      <el-select v-model="selectedWell" placeholder="请选择井名" style="width: 100%;" size="large">
+        <el-option v-for="name in wellNames" :key="name" :label="name" :value="name" />
+      </el-select>
+      <template #footer>
+        <el-button @click="wellSelectVisible = false">取消</el-button>
+        <el-button type="primary" :loading="wellSelectLoading" @click="confirmWellSelect">确认导入</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -243,9 +353,9 @@
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { clearFiles, deleteFile, getFileParseReport } from '@/api/file'
+import { clearFiles, deleteFile, getFileParseReport, getFileLayers, saveFileLayers, deleteFileLayers, copyLayersToFiles, importLayersFromExcel } from '@/api/file'
 import { getAllColumnMappings, addColumnMapping } from '@/api/columnMapping'
-import { Delete, DocumentChecked, FolderOpened, Loading, Plus, Search, Upload, View } from '@element-plus/icons-vue'
+import { Delete, DocumentChecked, FolderOpened, Loading, Plus, Search, Upload, View, Menu } from '@element-plus/icons-vue'
 
 const loading = ref(false)
 const tableData = ref([])
@@ -415,6 +525,173 @@ const formatRange = (min, max, unit = '') => {
   const maxText = formatReportValue(max)
   if (minText === '-' || maxText === '-') return '-'
   return `${minText} - ${maxText}${unit ? ` ${unit}` : ''}`
+}
+
+// ==================== 地质分层配置 ====================
+const layerDialogVisible = ref(false)
+const layerLoading = ref(false)
+const layerSaving = ref(false)
+const layerFile = ref({})
+const layerRows = ref([])
+
+const openLayerDialog = async (row) => {
+  layerFile.value = row
+  layerDialogVisible.value = true
+  layerLoading.value = true
+  try {
+    const data = await getFileLayers(row.id)
+    layerRows.value = (data || []).map(l => ({
+      layerName: l.layerName,
+      topDepth: l.topDepth,
+      bottomDepth: l.bottomDepth,
+      remark: l.remark || ''
+    }))
+    if (layerRows.value.length === 0) {
+      layerRows.value.push({ layerName: '', topDepth: null, bottomDepth: null, remark: '' })
+    }
+  } catch (error) {
+    ElMessage.error('获取分层配置失败')
+    layerRows.value = [{ layerName: '', topDepth: null, bottomDepth: null, remark: '' }]
+  } finally {
+    layerLoading.value = false
+  }
+}
+
+const saveLayerConfig = async () => {
+  const validRows = layerRows.value.filter(r => r.layerName && r.topDepth != null && r.bottomDepth != null)
+  if (validRows.length === 0 && layerRows.value.length > 0) {
+    ElMessage.warning('请至少填写一条完整的分层记录（层名 + 顶深 + 底深）')
+    return
+  }
+  layerSaving.value = true
+  try {
+    await saveFileLayers(layerFile.value.id, validRows)
+    ElMessage.success(`分层配置保存成功，共 ${validRows.length} 层`)
+    layerDialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error.message || '保存分层配置失败')
+  } finally {
+    layerSaving.value = false
+  }
+}
+
+const handleClearLayers = async () => {
+  try {
+    await ElMessageBox.confirm('确定要清空当前文件的所有分层配置吗？此操作不可恢复。', '清空分层', {
+      confirmButtonText: '确认清空',
+      cancelButtonText: '取消',
+      type: 'warning'
+    })
+    await deleteFileLayers(layerFile.value.id)
+    layerRows.value = [{ layerName: '', topDepth: null, bottomDepth: null, remark: '' }]
+    ElMessage.success('分层配置已清空')
+  } catch (e) {
+    if (e !== 'cancel') ElMessage.error(e.message || '清空失败')
+  }
+}
+
+// ==================== P1: 复制分层到其他文件 ====================
+const copyLayerDialogVisible = ref(false)
+const copyLayerLoading = ref(false)
+const copyFileList = ref([])
+const copySelectedFiles = ref([])
+const copyFileTableRef = ref(null)
+
+const openCopyLayerDialog = async () => {
+  // 获取当前用户所有可用文件（排除当前文件）
+  try {
+    const res = await request.get('/file/page', { params: { current: 1, size: 1000 } })
+    const allFiles = res.records || []
+    copyFileList.value = allFiles.filter(f => f.id !== layerFile.value.id && f.status === 1)
+    copySelectedFiles.value = []
+    copyLayerDialogVisible.value = true
+  } catch (error) {
+    ElMessage.error('获取文件列表失败')
+  }
+}
+
+const handleCopySelectionChange = (rows) => {
+  copySelectedFiles.value = rows
+}
+
+const confirmCopyLayers = async () => {
+  if (copySelectedFiles.value.length === 0) return
+  copyLayerLoading.value = true
+  try {
+    const targetIds = copySelectedFiles.value.map(f => f.id)
+    await copyLayersToFiles(layerFile.value.id, targetIds)
+    ElMessage.success(`已复制分层配置到 ${targetIds.length} 个文件`)
+    copyLayerDialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error.message || '复制分层失败')
+  } finally {
+    copyLayerLoading.value = false
+  }
+}
+
+// ==================== P2: Excel 导入分层 ====================
+const layerImportFile = ref(null) // 缓存上传的文件
+const wellSelectVisible = ref(false)
+const wellSelectLoading = ref(false)
+const wellNames = ref([])
+const selectedWell = ref('')
+
+const handleLayerExcelImport = async (options) => {
+  layerImportFile.value = options.file
+  const formData = new FormData()
+  formData.append('file', options.file)
+  try {
+    layerLoading.value = true
+    const res = await importLayersFromExcel(layerFile.value.id, formData)
+
+    // 检查是否需要选择井名
+    if (res && res.needSelectWell) {
+      wellNames.value = res.wellNames || []
+      selectedWell.value = wellNames.value[0] || ''
+      wellSelectVisible.value = true
+      return
+    }
+
+    ElMessage.success(res || '导入成功')
+    await reloadLayerRows()
+  } catch (error) {
+    ElMessage.error(error.message || 'Excel 导入失败，请确认文件格式')
+  } finally {
+    layerLoading.value = false
+  }
+}
+
+const confirmWellSelect = async () => {
+  if (!selectedWell.value) {
+    ElMessage.warning('请选择井名')
+    return
+  }
+  wellSelectLoading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', layerImportFile.value)
+    const res = await importLayersFromExcel(layerFile.value.id, formData, selectedWell.value)
+    ElMessage.success(res || '导入成功')
+    wellSelectVisible.value = false
+    await reloadLayerRows()
+  } catch (error) {
+    ElMessage.error(error.message || '导入失败')
+  } finally {
+    wellSelectLoading.value = false
+  }
+}
+
+const reloadLayerRows = async () => {
+  const data = await getFileLayers(layerFile.value.id)
+  layerRows.value = (data || []).map(l => ({
+    layerName: l.layerName,
+    topDepth: l.topDepth,
+    bottomDepth: l.bottomDepth,
+    remark: l.remark || ''
+  }))
+  if (layerRows.value.length === 0) {
+    layerRows.value.push({ layerName: '', topDepth: null, bottomDepth: null, remark: '' })
+  }
 }
 
 const customUpload = async (options) => {
@@ -621,6 +898,11 @@ onUnmounted(() => {
 .table-card {
   flex: 1;
   min-height: 0;
+  overflow: auto;
+}
+
+.table-card :deep(.el-table) {
+  height: 100%;
 }
 
 .table-empty {
@@ -631,6 +913,7 @@ onUnmounted(() => {
   padding: 15px 0;
   display: flex;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 
 .sandbox-alert {
@@ -733,5 +1016,64 @@ onUnmounted(() => {
   .report-summary {
     grid-template-columns: 1fr;
   }
+}
+
+/* ==================== 地质分层 Dialog ==================== */
+.layer-dialog :deep(.el-dialog__header) {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+  margin-right: 0;
+}
+
+.layer-dialog :deep(.el-dialog__body) {
+  padding: 0;
+}
+
+.layer-dialog :deep(.el-dialog__footer) {
+  padding: 16px 24px;
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.layer-dialog-header {
+  padding: 20px 24px 16px;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+  background: linear-gradient(135deg, var(--el-color-primary-light-9) 0%, var(--el-fill-color-lighter) 100%);
+}
+
+.layer-file-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.layer-file-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.layer-file-desc {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.5;
+}
+
+.layer-table-wrapper {
+  padding: 16px 24px;
+}
+
+.layer-actions-bar {
+  display: flex;
+  gap: 12px;
+  padding: 12px 24px;
+  border-top: 1px solid var(--el-border-color-extra-light);
+  background: var(--el-fill-color-lighter);
+}
+
+.layer-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
 }
 </style>

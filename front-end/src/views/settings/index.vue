@@ -129,6 +129,42 @@
             </div>
           </div>
         </el-tab-pane>
+        <el-tab-pane label="运行日志" name="runtime" icon="Monitor">
+          <div class="pane-content">
+            <div class="pane-header">
+              <h3 class="pane-title">运行日志</h3>
+              <p class="pane-subtitle">实时查看后端服务运行状态和错误信息，每 3 秒自动刷新。</p>
+            </div>
+            <el-divider />
+
+            <div class="runtime-toolbar">
+              <el-select v-model="runtimeLevel" style="width: 140px;" @change="fetchRuntimeLogs">
+                <el-option label="全部" value="ALL" />
+                <el-option label="INFO" value="INFO" />
+                <el-option label="WARN" value="WARN" />
+                <el-option label="ERROR" value="ERROR" />
+              </el-select>
+              <el-button type="primary" icon="Refresh" @click="fetchRuntimeLogs" :loading="runtimeLoading">刷新日志</el-button>
+              <el-button type="danger" icon="Delete" plain @click="runtimeLogs = []">清空显示</el-button>
+              <span class="runtime-count">共 {{ runtimeLogs.length }} 条</span>
+            </div>
+
+            <div class="runtime-terminal" ref="runtimeTerminalRef">
+              <div v-if="runtimeLogs.length === 0" class="runtime-empty">暂无运行日志...</div>
+              <div
+                v-for="(log, idx) in runtimeLogs"
+                :key="idx"
+                class="runtime-line"
+                :class="'level-' + log.level.toLowerCase()"
+              >
+                <span class="runtime-time">{{ log.timestamp }}</span>
+                <span class="runtime-level">[{{ log.level }}]</span>
+                <span class="runtime-logger">{{ log.logger }}</span>
+                <span class="runtime-msg">{{ log.message }}</span>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-card>
 
@@ -199,11 +235,11 @@
 </template>
 
 <script setup>
-import { reactive, ref, watch } from 'vue'
+import { reactive, ref, watch, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { logout as logoutApi } from '@/api/auth'
-import { getLoginLogs, getAllLogs, getStorageStats, cleanupCache } from '@/api/log'
+import { getLoginLogs, getAllLogs, getStorageStats, cleanupCache, getRuntimeLogs } from '@/api/log'
 import { updateProfile, updatePwd } from '@/api/user'
 import { useUserStore } from '@/store/user'
 import { getRefreshToken } from '@/utils/token'
@@ -425,7 +461,57 @@ watch(activeTab, (val) => {
   if (val === 'oplog' && opLogData.value.length === 0) {
     fetchOpLogs()
   }
+  if (val === 'runtime') {
+    fetchRuntimeLogs()
+    startRuntimePolling()
+  } else {
+    stopRuntimePolling()
+  }
 })
+
+onUnmounted(() => {
+  stopRuntimePolling()
+})
+
+// --- 运行日志 ---
+const runtimeLogs = ref([])
+const runtimeLoading = ref(false)
+const runtimeLevel = ref('ALL')
+const runtimeTerminalRef = ref(null)
+let runtimeTimer = null
+
+const fetchRuntimeLogs = async () => {
+  runtimeLoading.value = true
+  try {
+    const res = await getRuntimeLogs({ level: runtimeLevel.value, lines: 200 })
+    if (res) {
+      runtimeLogs.value = res
+      await nextTick()
+      scrollToBottom()
+    }
+  } finally {
+    runtimeLoading.value = false
+  }
+}
+
+const scrollToBottom = () => {
+  const el = runtimeTerminalRef.value
+  if (el) el.scrollTop = el.scrollHeight
+}
+
+const startRuntimePolling = () => {
+  stopRuntimePolling()
+  runtimeTimer = setInterval(() => {
+    if (activeTab.value === 'runtime') fetchRuntimeLogs()
+  }, 3000)
+}
+
+const stopRuntimePolling = () => {
+  if (runtimeTimer) {
+    clearInterval(runtimeTimer)
+    runtimeTimer = null
+  }
+}
 </script>
 
 <style scoped>
@@ -591,5 +677,93 @@ watch(activeTab, (val) => {
   .settings-select {
     width: 100%;
   }
+}
+
+/* ==================== 运行日志终端 ==================== */
+.runtime-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  background: var(--el-fill-color-lighter, #f5f7fa);
+  border-radius: 8px;
+}
+
+.runtime-count {
+  margin-left: auto;
+  font-size: 14px;
+  color: var(--el-text-color-secondary);
+  font-weight: 600;
+}
+
+.runtime-terminal {
+  background: #1e1e2e;
+  border-radius: 8px;
+  padding: 16px;
+  height: 420px;
+  overflow-y: auto;
+  font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.runtime-empty {
+  color: #6c7086;
+  text-align: center;
+  padding: 40px 0;
+}
+
+.runtime-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #cdd6f4;
+}
+
+.runtime-time {
+  color: #6c7086;
+  margin-right: 8px;
+}
+
+.runtime-level {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.runtime-logger {
+  color: #89b4fa;
+  margin-right: 8px;
+}
+
+.runtime-msg {
+  color: #cdd6f4;
+}
+
+.runtime-line.level-info .runtime-level {
+  color: #a6e3a1;
+}
+
+.runtime-line.level-warn .runtime-level {
+  color: #f9e2af;
+}
+
+.runtime-line.level-warn .runtime-msg {
+  color: #f9e2af;
+}
+
+.runtime-line.level-error .runtime-level {
+  color: #f38ba8;
+}
+
+.runtime-line.level-error .runtime-msg {
+  color: #f38ba8;
+}
+
+.runtime-line.level-debug .runtime-level {
+  color: #6c7086;
+}
+
+.runtime-line.level-debug .runtime-msg {
+  color: #6c7086;
 }
 </style>

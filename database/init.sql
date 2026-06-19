@@ -161,5 +161,17 @@ CREATE TABLE IF NOT EXISTS `sys_refresh_token` (
   KEY `idx_expires_at` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='刷新令牌表';
 
+-- 9. 地质分层配置表
+CREATE TABLE IF NOT EXISTS well_layer (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  file_id BIGINT NOT NULL COMMENT '关联 log_file_info.id',
+  layer_name VARCHAR(50) NOT NULL COMMENT '层位名称，如盒5、盒6',
+  top_depth DECIMAL(10,4) NOT NULL COMMENT '顶深(m)',
+  bottom_depth DECIMAL(10,4) NOT NULL COMMENT '底深(m)',
+  remark VARCHAR(100) COMMENT '备注',
+  create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_file_depth (file_id, top_depth, bottom_depth)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='地质分层配置表';
+
 
 

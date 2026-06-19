@@ -173,6 +173,7 @@ const instructionsList = ref([])
 const quickEntries = [
   { key: 'quickstart', label: '新手入门', category: 'quickstart' },
   { key: 'feature-upload', label: '数据上传', category: 'feature', keyword: '上传' },
+  { key: 'feature-layer', label: '分层配置', category: 'feature', keyword: '分层' },
   { key: 'feature-export', label: '导出报表', category: 'feature', keyword: '导出' },
   { key: 'faq', label: '常见报错', category: 'faq' }
 ]
@@ -300,6 +301,41 @@ const fallbackData = [
     links: [{ label: '去测井数据看板', path: '/files' }]
   },
   {
+    id: 'local-11',
+    title: '地质分层配置',
+    icon: 'PriceTag',
+    category: 'feature',
+    summary: '为测井文件配置地层分段（层名、顶深、底深），导出时自动附加层位列，异常提取时跨层段自动切割。',
+    steps: [
+      '在"数据源管理"页面找到目标文件，点击操作列的"分层"按钮打开分层配置对话框。',
+      '手动输入：在可编辑表格中逐行填写层位名称、顶深（m）、底深（m）和备注，点击"保存分层配置"。',
+      '从文件导入：点击"从文件导入"上传 Excel/CSV/TXT 文件，系统自动识别表头中的"层"、"顶"、"底"关键词定位列。',
+      '如果导入文件包含多口井的数据，系统会弹出井名选择对话框，选择当前文件对应的井名后再导入。',
+      '跨文件复制：配好一口井后点击"复制到其他文件"，勾选同区块其他井，层名结构会被复制，深度值保持不变。',
+      '配置完成后，导出 Excel 时会自动追加"层位"列；异常测段提取时如果测段跨越分层边界会自动切割为多段。'
+    ],
+    note: '分层边界采用左闭右开规则：顶深 <= depth < 底深。建议下一层的顶深 = 上一层的底深，避免重叠或空隙。',
+    content: '',
+    links: [{ label: '去数据源管理', path: '/datasource' }]
+  },
+  {
+    id: 'local-12',
+    title: '运行日志查看',
+    icon: 'Bell',
+    category: 'feature',
+    summary: '在系统设置中实时查看后端服务的运行日志，方便排查报错和监控运行状态。',
+    steps: [
+      '进入"系统设置"页面，点击左侧导航的"运行日志"选项卡。',
+      '日志面板以深色终端风格显示后端实时日志，包括时间戳、日志级别、来源类名和消息内容。',
+      '通过顶部下拉框可按级别筛选：ALL（全部）、INFO（普通信息）、WARN（警告）、ERROR（错误）。',
+      '日志每 3 秒自动刷新，新日志自动滚动到底部，最新内容始终可见。',
+      '点击"刷新日志"可立即手动拉取最新日志，点击"清空显示"清除当前面板内容（不影响后端缓冲）。'
+    ],
+    note: '运行日志保存在内存环形缓冲中（最多 500 条），重启应用后清空。如需持久化日志请查看后端控制台输出。',
+    content: '',
+    links: [{ label: '去系统设置', path: '/settings' }]
+  },
+  {
     id: 'local-7',
     title: '字典映射参数配置',
     icon: 'PriceTag',
@@ -355,15 +391,16 @@ const fallbackData = [
     title: '系统设置与账号管理',
     icon: 'Lock',
     category: 'faq',
-    summary: '系统设置页面提供个人信息维护、密码管理和数据用量查看功能。',
+    summary: '系统设置页面提供个人信息维护、密码管理、操作日志、运行日志和数据用量查看功能。',
     steps: [
       '个人信息：可以修改真实姓名、绑定邮箱、个人简介和头像（支持外链图片 URL）。',
       '修改密码：建议定期更换密码。修改成功后系统自动退出，需要使用新密码重新登录。',
       '存储用量：点击"查看用量"可查看当前账号已上传文件数、解析总行数、脏数据行数和操作日志条数。',
       '操作日志：记录所有文件上传、解析、导出、删除等操作历史，支持分页查看和按模块分类筛选。',
-      '登录日志：在"安全隐私"中可以查看最近的登录记录。'
+      '运行日志：实时查看后端服务的运行状态和错误信息，支持按级别（INFO/WARN/ERROR）筛选，每 3 秒自动刷新。',
+      '清除缓存：一键清理已删除文件的残留数据、脏数据、过期操作日志和过期令牌。'
     ],
-    note: '每个用户只能查看和操作自己上传的文件，不同用户之间的数据完全隔离。',
+    note: '每个用户只能查看和操作自己上传的文件，不同用户之间的数据完全隔离。运行日志保存在内存中，重启后清空。',
     content: '',
     links: [{ label: '去系统设置', path: '/settings' }]
   }
@@ -412,7 +449,12 @@ const fetchInstructions = async () => {
   try {
     const data = await getInstructionList()
     if (Array.isArray(data) && data.length > 0) {
-      instructionsList.value = data
+      // 合并 API 数据与 fallback 数据：API 没有的条目自动补充
+      const apiTitles = new Set(data.map(d => (d.title || '').trim()))
+      const missingFallback = fallbackData.filter(fb => {
+        return !Array.from(apiTitles).some(t => t.includes(fb.title) || fb.title.includes(t))
+      })
+      instructionsList.value = [...data, ...missingFallback]
     } else {
       instructionsList.value = fallbackData
     }
