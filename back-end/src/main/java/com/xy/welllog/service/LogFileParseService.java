@@ -287,15 +287,22 @@ public class LogFileParseService {
      */
     @Async("logFileExecutor")
     public void asyncParseAndSaveTxtStream(File file, String title, Long fileId, List<String> columns) {
+        log.info("[解析] 开始异步解析: {}, fileId={}, 列数={}", title, fileId, columns != null ? columns.size() : 0);
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
-        if (fileInfo == null) return;
+        if (fileInfo == null) {
+            log.warn("[解析] 文件不存在, fileId={}", fileId);
+            return;
+        }
 
         // 字典规则只编译一次，后续所有批次复用
         Map<String, Pattern> compiledRules = compileMappingRules();
+        log.debug("[解析] 编译字典规则: {} 条", compiledRules.size());
 
         String lowerTitle = title.toLowerCase();
         boolean isExcel = lowerTitle.endsWith(".xls") || lowerTitle.endsWith(".xlsx");
         boolean isCsv = lowerTitle.endsWith(".csv");
+        log.info("[解析] 文件类型: {}, 编码检测: {}", isExcel ? "Excel" : (isCsv ? "CSV" : "TXT"),
+                isExcel ? "无需检测" : "自动检测");
 
         // 共享状态（在监听器/循环中复用）
         final int[] totalRows = {0};
@@ -325,6 +332,7 @@ public class LogFileParseService {
             } else {
                 // CSV/TXT: BufferedReader 流式逐行读取，自动检测编码
                 Charset charset = detectFileEncoding(file);
+                log.info("[解析] 编码检测结果: {}, 文件: {}", charset.name(), title);
                 try (BufferedReader br = new BufferedReader(
                         new InputStreamReader(new FileInputStream(file), charset))) {
                     String line;
@@ -346,10 +354,10 @@ public class LogFileParseService {
             fileInfo.setColumnsJson(JSONUtil.toJsonStr(columns));
             fileInfo.setStatus(1); // 成功
             fileInfoService.updateById(fileInfo);
-            log.info("异步解析完成: {}, 文件ID: {}, 共 {} 行", title, fileId, totalRows[0]);
+            log.info("[解析] 解析完成: {}, fileId={}, 共 {} 行有效数据", title, fileId, totalRows[0]);
 
         } catch (Exception e) {
-            log.error("异步解析异常: fileId={}", fileId, e);
+            log.error("[解析] 解析异常: fileId={}, 已处理 {} 行", fileId, totalRows[0], e);
             fileInfo.setStatus(-1); // 失败
             fileInfoService.updateById(fileInfo);
         }

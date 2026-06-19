@@ -11,6 +11,7 @@ import com.xy.welllog.service.SysOperationLogService;
 import com.xy.welllog.service.SysUserService;
 import com.xy.welllog.utils.JwtUtils;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
@@ -18,6 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Arrays;
 import java.util.List;
 
+@Slf4j
 @RestController
 @RequestMapping("/column-mapping")
 public class SysColumnMappingController {
@@ -88,6 +90,7 @@ public class SysColumnMappingController {
         boolean saved = sysColumnMappingService.save(mapping);
         if (saved) {
             operationLogService.recordLog("字段映射", "新增字段映射 [" + getMappingLabel(mapping) + "]", 0, 0L, getUserId(request));
+            log.info("[字典] 新增字段映射: {}", getMappingLabel(mapping));
         }
         return Result.success(saved);
     }
@@ -97,6 +100,7 @@ public class SysColumnMappingController {
         boolean updated = sysColumnMappingService.updateById(mapping);
         if (updated) {
             operationLogService.recordLog("字段映射", "更新字段映射 [" + getMappingLabel(mapping) + "]", 0, 0L, getUserId(request));
+            log.info("[字典] 更新字段映射: {}", getMappingLabel(mapping));
         }
         return Result.success(updated);
     }
@@ -105,11 +109,13 @@ public class SysColumnMappingController {
     public Result<?> delete(@PathVariable Long id, HttpServletRequest request) {
         SysColumnMapping mapping = sysColumnMappingService.getById(id);
         if (mapping != null && mapping.getIsCore() != null && mapping.getIsCore() == 1) {
+            log.warn("[字典] 尝试删除核心列被拒绝: id={}", id);
             return Result.failed("核心列禁止删除");
         }
         boolean removed = sysColumnMappingService.removeById(id);
         if (removed) {
             operationLogService.recordLog("字段映射", "删除字段映射 [" + getMappingLabel(mapping) + "]", 0, 0L, getUserId(request));
+            log.info("[字典] 删除字段映射: {}", getMappingLabel(mapping));
         }
         return Result.success(removed);
     }

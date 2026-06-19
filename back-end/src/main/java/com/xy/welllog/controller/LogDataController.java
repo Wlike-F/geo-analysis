@@ -207,8 +207,9 @@ public class LogDataController {
             }
 
             operationLogService.recordLog("报表导出", "筛选结果批量ZIP导出", exportedFileCount, exportedLineCount, userId);
+            log.info("[导出] 批量ZIP导出完成: {} 个文件, {} 行", exportedFileCount, exportedLineCount);
         } catch (Exception e) {
-            log.error("批量导出ZIP流异常", e);
+            log.error("[导出] 批量ZIP导出异常", e);
             response.setStatus(500);
         }
     }
@@ -219,6 +220,7 @@ public class LogDataController {
         query.setFileId(fileId);
 
         List<String> cols = getColumns(fileId);
+        log.info("[导出] 开始Excel导出: fileId={}, 列数={}", fileId, cols.size());
 
         try {
             response.setContentType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
@@ -241,9 +243,10 @@ public class LogDataController {
                 WriteSheet writeSheet = EasyExcel.writerSheet("Filtered Data").build();
                 long totalWritten = streamWriteData(excelWriter, writeSheet, fileId, query, cols);
                 operationLogService.recordLog("报表导出", "筛选结果Excel导出", 1, totalWritten, getUserId(request));
+                log.info("[导出] Excel导出完成: fileId={}, {} 行", fileId, totalWritten);
             }
         } catch (Exception e) {
-            log.error("导出Excel异常", e);
+            log.error("[导出] Excel导出异常: fileId={}", fileId, e);
             response.setStatus(500);
         }
     }

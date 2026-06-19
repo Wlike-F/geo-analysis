@@ -9,10 +9,12 @@ import com.xy.welllog.service.SysOperationLogService;
 import com.xy.welllog.service.SysUserService;
 import com.xy.welllog.utils.JwtUtils;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
+@Slf4j
 @RestController
 @RequestMapping("/user")
 public class UserController {
@@ -83,6 +85,7 @@ public class UserController {
             currentUser.setIntroduction(userParam.getIntroduction());
             sysUserService.updateById(currentUser);
             operationLogService.recordLog("用户管理", "更新个人资料", 0, 0L, currentUser.getId());
+            log.info("[用户] {} 更新个人资料", username);
             return Result.success(null, "个人信息更新成功");
         }
         return Result.failed("未找到当前用户");
@@ -129,6 +132,7 @@ public class UserController {
         currentUser.setPassword(newEncryptPsw);
         sysUserService.updateById(currentUser);
         operationLogService.recordLog("用户管理", "修改登录密码", 0, 0L, currentUser.getId());
+        log.info("[用户] {} 修改密码成功", username);
 
         return Result.success(null, "密码修改成功，请重新登录");
     }
@@ -165,6 +169,7 @@ public class UserController {
 
         sysUserService.save(user);
         operationLogService.recordLog("用户管理", "新增用户 [" + user.getUsername() + "]", 0, 0L, getUserId(request));
+        log.info("[用户] 管理员新增用户: {}", user.getUsername());
         return Result.success(null, "添加成功，默认密码为：123456");
     }
 
@@ -195,6 +200,7 @@ public class UserController {
         sysUserService.removeById(id);
         String target = exist != null ? exist.getUsername() : String.valueOf(id);
         operationLogService.recordLog("用户管理", "删除用户 [" + target + "]", 0, 0L, getUserId(request));
+        log.warn("[用户] 管理员删除用户: {}", target);
         return Result.success(null, "删除成功");
     }
 }
