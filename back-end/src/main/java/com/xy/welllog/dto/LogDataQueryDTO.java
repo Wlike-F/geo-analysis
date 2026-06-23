@@ -14,5 +14,6 @@ public class LogDataQueryDTO {
     public static class FilterRange {
         private BigDecimal min;
         private BigDecimal max;
+        private java.util.List<String> values;  // 文本列多选筛选值
     }
 }

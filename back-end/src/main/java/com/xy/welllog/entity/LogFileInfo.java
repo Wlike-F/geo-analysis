@@ -11,6 +11,7 @@ public class LogFileInfo {
     private Long userId;
     private String fileName;
     private String columnsJson;
+    private String textColumnsJson;  // 文本列配置 {"岩性":"text_col_1", "地层":"text_col_2"}
     private Integer totalRows;
     private Integer status;
     private Date createTime;

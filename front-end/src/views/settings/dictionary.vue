@@ -43,10 +43,13 @@
           <el-table-column label="中文含义" prop="chineseMeaning" min-width="120" />
           <el-table-column label="别名列表（逗号分隔）" prop="aliasList" min-width="200">
             <template #default="{ row }">
-              <el-tooltip v-if="row.aliasList && row.aliasList.length > 20" effect="dark" :content="row.aliasList" placement="top">
-                <span>{{ row.aliasList.substring(0, 20) }}...</span>
-              </el-tooltip>
-              <span v-else>{{ row.aliasList }}</span>
+              <template v-if="row.aliasList">
+                <el-tooltip v-if="getAliasText(row.aliasList).length > 20" effect="dark" :content="getAliasText(row.aliasList)" placement="top">
+                  <span>{{ getAliasText(row.aliasList).substring(0, 20) }}...</span>
+                </el-tooltip>
+                <span v-else>{{ getAliasText(row.aliasList) }}</span>
+              </template>
+              <span v-else style="color: var(--el-text-color-placeholder);">—</span>
             </template>
           </el-table-column>
           <el-table-column label="是否核心" prop="isCore" align="center" width="100">
@@ -144,7 +147,7 @@ const listQuery = reactive({
 })
 
 const temp = reactive({
-  id: undefined,
+  id: null,
   standardKey: '',
   standardName: '',
   chineseMeaning: '',
@@ -161,10 +164,23 @@ const textMap = reactive({
 
 const dataForm = ref(null)
 const rules = reactive({
-  standardKey: [{ required: true, message: '标准键名必填', trigger: 'blur' }],
+  standardKey: [{
+    required: true, message: '标准键名必填', trigger: 'blur',
+    validator: (rule, value, callback) => {
+      if (dialogStatus.value === 'update' && temp.isCore === 1) return callback()
+      if (!value) return callback(new Error('标准键名必填'))
+      callback()
+    }
+  }],
   standardName: [{ required: true, message: '标准显示名必填', trigger: 'blur' }],
   chineseMeaning: [{ required: true, message: '中文含义必填', trigger: 'blur' }]
 })
+
+const getAliasText = (aliasList) => {
+  if (!aliasList) return ''
+  if (Array.isArray(aliasList)) return aliasList.join(',')
+  return String(aliasList)
+}
 
 const getList = () => {
   listLoading.value = true
@@ -231,7 +247,12 @@ const createData = () => {
 }
 
 const handleUpdate = (row) => {
-  Object.assign(temp, row)
+  temp.id = row.id
+  temp.standardKey = row.standardKey
+  temp.standardName = row.standardName
+  temp.chineseMeaning = row.chineseMeaning
+  temp.aliasList = row.aliasList || ''
+  temp.isCore = row.isCore || 0
   dialogStatus.value = 'update'
   dialogFormVisible.value = true
   nextTick(() => dataForm.value?.clearValidate())
@@ -252,23 +273,29 @@ const updateData = () => {
 }
 
 const handleDelete = (row) => {
-  ElMessageBox.confirm('确认删除该映射记录吗?', '提示', { type: 'warning' }).then(() => {
-    deleteColumnMapping(row.id).then(() => {
+  ElMessageBox.confirm('确认删除该映射记录吗?', '提示', { type: 'warning' }).then(async () => {
+    try {
+      await deleteColumnMapping(row.id)
       getList()
       ElMessage.success('删除成功')
-    })
-  })
+    } catch {
+      ElMessage.error('删除失败，请重试')
+    }
+  }).catch(() => {})
 }
 
 const handleBatchDelete = () => {
   if (selection.value.length === 0) return
-  ElMessageBox.confirm(`确认删除选中的 ${selection.value.length} 条记录吗?`, '提示', { type: 'warning' }).then(() => {
-    const ids = selection.value.map(item => item.id)
-    batchDeleteColumnMapping(ids).then(() => {
+  ElMessageBox.confirm(`确认删除选中的 ${selection.value.length} 条记录吗?`, '提示', { type: 'warning' }).then(async () => {
+    try {
+      const ids = selection.value.map(item => item.id)
+      await batchDeleteColumnMapping(ids)
       getList()
       ElMessage.success('批量删除成功')
-    })
-  })
+    } catch {
+      ElMessage.error('批量删除失败，请重试')
+    }
+  }).catch(() => {})
 }
 
 onMounted(() => {

@@ -4,10 +4,7 @@ export function uploadTxtFile(data) {
   return request({
     url: '/file/upload',
     method: 'post',
-    data,
-    headers: {
-      'Content-Type': 'multipart/form-data'
-    }
+    data
   })
 }
 
@@ -145,8 +142,32 @@ export function importLayersFromExcel(fileId, formData, wellName) {
     url: `/file/${fileId}/layers/import`,
     method: 'post',
     data: formData,
-    params,
-    headers: { 'Content-Type': 'multipart/form-data' }
+    params
+  })
+}
+
+// ==================== 文本列筛选 ====================
+
+export function getTextColumns(fileId) {
+  return request({
+    url: `/data/${fileId}/text-columns`,
+    method: 'get'
+  })
+}
+
+export function saveTextColumns(fileId, mapping) {
+  return request({
+    url: `/data/${fileId}/text-columns`,
+    method: 'post',
+    data: mapping
+  })
+}
+
+export function getDistinctValues(fileId, column) {
+  return request({
+    url: `/data/${fileId}/distinct-values`,
+    method: 'get',
+    params: { column }
   })
 }
 

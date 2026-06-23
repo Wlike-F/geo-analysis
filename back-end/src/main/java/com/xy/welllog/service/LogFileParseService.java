@@ -286,7 +286,8 @@ public class LogFileParseService {
      * 2. 异步解析逻辑：根据文件类型分流 + 字典规则只编译一次 + 使用指定的 columns 映射落库
      */
     @Async("logFileExecutor")
-    public void asyncParseAndSaveTxtStream(File file, String title, Long fileId, List<String> columns) {
+    public void asyncParseAndSaveTxtStream(File file, String title, Long fileId,
+                                           List<String> columns, Map<String, String> textColumns) {
         log.info("[解析] 开始异步解析: {}, fileId={}, 列数={}", title, fileId, columns != null ? columns.size() : 0);
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
         if (fileInfo == null) {
@@ -318,12 +319,12 @@ public class LogFileParseService {
                     public void invoke(Map<Integer, String> row, AnalysisContext context) {
                         String dataLine = convertExcelRowToString(row);
                         processParsedLine(dataLine, fileId, columns, compiledRules,
-                                totalRows, lineNum, dataStarted, batch);
+                                totalRows, lineNum, dataStarted, batch, textColumns);
                     }
                     @Override
                     public void doAfterAllAnalysed(AnalysisContext context) {
                         if (!batch.isEmpty()) {
-                            dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules);
+                            dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules, textColumns);
                             batch.clear();
                         }
                     }
@@ -341,11 +342,11 @@ public class LogFileParseService {
                         if (line.isEmpty()) continue;
                         if (isCsv) line = line.replaceAll(",", " ");
                         processParsedLine(line, fileId, columns, compiledRules,
-                                totalRows, lineNum, dataStarted, batch);
+                                totalRows, lineNum, dataStarted, batch, textColumns);
                     }
                 }
                 if (!batch.isEmpty()) {
-                    dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules);
+                    dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules, textColumns);
                     batch.clear();
                 }
             }
@@ -370,7 +371,7 @@ public class LogFileParseService {
     private void processParsedLine(String dataLine, Long fileId, List<String> columns,
                                    Map<String, Pattern> compiledRules,
                                    int[] totalRows, long[] lineNum, boolean[] dataStarted,
-                                   List<Map<String, Object>> batch) {
+                                   List<Map<String, Object>> batch, Map<String, String> textColumns) {
         lineNum[0]++;
         if (dataLine.trim().isEmpty()) return;
         String[] parts = dataLine.trim().split("\\s+");
@@ -406,7 +407,7 @@ public class LogFileParseService {
         totalRows[0]++;
 
         if (batch.size() >= 2000) {
-            dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules);
+            dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules, textColumns);
             batch.clear();
         }
     }

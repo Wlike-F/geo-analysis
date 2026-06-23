@@ -1,136 +1,309 @@
 <template>
   <div class="files-container">
-    <!-- ① 紧凑标题栏（替代步骤条） -->
-    <div class="page-header mb-20">
-      <div class="page-header-left">
+    <!-- ① 顶部状态栏 -->
+    <div class="status-bar mb-12">
+      <div class="status-bar-left">
         <h3 class="page-title">异常测段提取</h3>
-        <el-tag v-if="tabs.length" type="info" effect="plain" size="small">已选 {{ tabs.length }} 个文件</el-tag>
-      </div>
-      <div class="page-header-right">
-        <el-button type="primary" icon="FolderOpened" @click="openFileSelector">选择文件</el-button>
-        <el-button type="danger" icon="Delete" plain @click="closeAllTabs" :disabled="!tabs.length">清空已选</el-button>
+        <template v-if="tabs.length">
+          <span class="status-sep">|</span>
+          <span class="status-item">已选 <strong>{{ tabs.length }}</strong> 个文件</span>
+          <span class="status-sep">|</span>
+          <span class="status-item">原始 <strong>{{ totalOriginalRows.toLocaleString() }}</strong> 行</span>
+          <span class="status-sep">|</span>
+          <span class="status-item">保留 <strong>{{ totalFilteredRows.toLocaleString() }}</strong> 行</span>
+          <span class="status-sep">|</span>
+          <span class="status-item">保留率 <strong :class="{ 'rate-warn': retentionRate < 50 }">{{ retentionRate }}%</strong></span>
+          <template v-if="currentActiveFilterCount > 0">
+            <span class="status-sep">|</span>
+            <span class="status-item status-active condition-toggle" @click="conditionsPanelVisible = !conditionsPanelVisible">
+              生效条件 <strong>{{ currentActiveFilterCount }}</strong> 条
+              <el-icon class="condition-toggle-icon" :class="{ expanded: conditionsPanelVisible }"><ArrowDown /></el-icon>
+            </span>
+          </template>
+        </template>
       </div>
     </div>
 
-    <!-- ③ 全局筛选：虚线边框区分 -->
-    <el-card v-if="tabs.length > 0" shadow="never" class="global-filters-card mb-20">
-      <div class="filter-header">
-        <span class="title">多文件统一筛选</span>
-        <div class="actions">
-          <el-button type="primary" icon="Filter" @click="applyGlobalFilters">统一提取全部</el-button>
-          <el-button type="info" icon="Refresh" plain @click="clearGlobalFilters">清除筛选</el-button>
-          <el-button color="var(--el-color-success)" icon="Download" plain @click="handleBatchExport">批量导出</el-button>
-        </div>
+      <div v-if="conditionsPanelVisible && currentTab" class="conditions-panel">
+        <template v-if="currentActiveConditions.length > 0">
+          <el-tag
+            v-for="cond in currentActiveConditions"
+            :key="cond.col + cond.type + (cond.min || '') + (cond.max || '') + (cond.values ? cond.values.join(',') : '')"
+            size="small"
+            type="info"
+            effect="plain"
+            class="condition-tag"
+          >
+            <template v-if="cond.type === 'range'">
+              {{ cond.col }}：{{ cond.min || '—' }} ~ {{ cond.max || '—' }}
+            </template>
+            <template v-else>
+              {{ cond.col }}：{{ cond.values.join('、') }}
+            </template>
+          </el-tag>
+        </template>
+        <div v-else class="conditions-empty">当前文件暂无生效条件</div>
       </div>
 
-      <div class="filter-grid">
-        <div v-for="key in Object.keys(globalFilters)" :key="key" class="f-group">
-          <span class="f-label">{{ key }}</span>
-          <el-input v-model="globalFilters[key].min" class="f-input" placeholder="Min" clearable />
-          <span class="f-sep">-</span>
-          <el-input v-model="globalFilters[key].max" class="f-input" placeholder="Max" clearable />
-        </div>
+    <!-- ② 工具栏 -->
+    <div class="toolbar mb-16" v-if="tabs.length">
+      <div class="toolbar-group">
+        <el-button type="primary" icon="FolderOpened" @click="openFileSelector">选择文件</el-button>
+        <el-button type="primary" plain icon="Filter" @click="filterDrawerVisible = true">
+          条件筛选
+          <el-badge v-if="activeFilterCount > 0" :value="activeFilterCount" class="filter-badge" />
+        </el-button>
+        <el-button icon="Refresh" plain @click="clearAllFilters" :disabled="activeFilterCount === 0">清除条件</el-button>
       </div>
+      <div class="toolbar-group">
+        <el-button type="success" icon="Document" plain @click="handleExportCurrent">导出当前</el-button>
+        <el-button type="success" icon="Files" plain @click="handleBatchExport">导出全部</el-button>
+        <el-button type="danger" icon="Delete" plain @click="closeAllTabs">清空已选</el-button>
+      </div>
+    </div>
+
+    <!-- ③ 空状态 -->
+    <div v-if="tabs.length === 0" class="empty-state-main">
+      <el-empty description="暂无测井数据，请点击“选择文件”开始">
+        <el-button type="primary" icon="FolderOpened" @click="openFileSelector">选择文件</el-button>
+      </el-empty>
+    </div>
+
+    <!-- ④ 数据工作区 -->
+    <el-card v-else shadow="always" class="tabs-card">
+      <el-tabs v-model="activeTabName" type="border-card" closable @tab-remove="removeTab">
+        <el-tab-pane v-for="item in tabs" :key="item.name" :label="item.title" :name="item.name">
+          <div class="table-wrapper">
+            <el-table
+              :data="item.displayData"
+              border
+              stripe
+              height="550"
+              v-loading="item.loading"
+              element-loading-text="正在加载数据，请稍候..."
+            >
+              <el-table-column type="index" label="测点序列" width="80" align="center" fixed />
+              <el-table-column
+                v-for="col in item.columns"
+                :key="col"
+                :prop="col"
+                :label="col"
+                min-width="140"
+                align="center"
+                sortable
+              >
+                <template #default="{ row }">
+                  {{ getDisplayValue(row, col) }}
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <div class="pagination-container">
+            <el-pagination
+              v-model:current-page="item.currentPage"
+              v-model:page-size="item.pageSize"
+              :page-sizes="[100, 200, 500, 1000]"
+              layout="total, sizes, prev, pager, next, jumper"
+              :total="item.totalRows"
+              @size-change="(size) => handleSizeChange(item, size)"
+              @current-change="(page) => handleCurrentChange(item, page)"
+            />
+          </div>
+        </el-tab-pane>
+      </el-tabs>
     </el-card>
 
-    <div class="split-layout">
-      <el-card shadow="always" class="tabs-card">
-        <div v-if="tabs.length === 0" class="empty-state">
-          <el-empty description="暂无测井数据，请先在上方选择文件" />
+    <!-- ⑤ 右侧筛选抽屉 -->
+    <el-drawer v-model="filterDrawerVisible" title="条件筛选" direction="rtl" size="720px" :close-on-click-modal="true">
+      <div class="drawer-body">
+        <!-- 文本列配置 -->
+        <div class="drawer-section">
+          <div class="drawer-section-title" @click="drawerTextConfigVisible = !drawerTextConfigVisible">
+            <el-icon><Setting /></el-icon>
+            文本列配置
+            <el-tag v-if="currentTab?.textColumns?.length" size="small" type="success" effect="plain">
+              {{ currentTab?.textColumns?.length }} 个
+            </el-tag>
+            <el-icon class="expand-icon" :class="{ expanded: drawerTextConfigVisible }"><ArrowDown /></el-icon>
+          </div>
+          <div v-show="drawerTextConfigVisible" class="drawer-section-body">
+            <p class="text-config-tip">选择包含分类文本的列（如岩性、井号），最多 10 个。其余列默认数值筛选。</p>
+            <el-select v-model="currentTab.textColumns" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择文本列…" style="width: 100%;">
+              <el-option v-for="col in currentTab?.columns || []" :key="col" :label="col" :value="col" />
+            </el-select>
+            <el-button type="primary" size="small" style="margin-top: 8px;" :loading="textColumnSaving" @click="handleTextColumnConfigSave(currentTab)">
+              {{ textColumnSaving ? '正在回填数据...' : '保存并回填' }}
+            </el-button>
+          </div>
         </div>
 
-        <el-tabs
-          v-else
-          v-model="activeTabName"
-          type="border-card"
-          closable
-          @tab-remove="removeTab"
-        >
-          <el-tab-pane
-            v-for="item in tabs"
-            :key="item.name"
-            :label="item.title"
-            :name="item.name"
-          >
-            <!-- ⑤ 筛选条件区：记录数提到顶部，按钮放底部 -->
-            <div class="filter-bar mb-20 p-15 per-file-filter">
-              <div class="filter-stats-bar">
-                <span class="count-label">筛选记录数</span>
-                <strong class="count-value">{{ item.totalRows.toLocaleString() }}</strong>
-                <span class="count-unit">行</span>
+        <!-- 筛选条件 -->
+        <div class="drawer-section">
+          <!-- 一体化范围切换 + 内容区 -->
+          <div class="filter-scope-tabs">
+            <div
+              class="scope-tab"
+              :class="{ active: filterScope === 'current' }"
+              @click="filterScope = 'current'"
+            >
+              <el-icon><Document /></el-icon>
+              当前文件
+              <span v-if="currentTab" class="scope-tab-sub">{{ currentTab.title }}</span>
+            </div>
+            <div
+              class="scope-tab"
+              :class="{ active: filterScope === 'all' }"
+              @click="filterScope = 'all'"
+            >
+              <el-icon><Files /></el-icon>
+              所有文件
+              <span class="scope-tab-sub">{{ tabs.length }} 个</span>
+            </div>
+          </div>
+
+          <div class="drawer-section-body">
+            <!-- 当前文件模式 -->
+            <template v-if="filterScope === 'current' && currentTab">
+              <div v-for="col in currentTab.columns" :key="col" class="drawer-filter-item">
+                <template v-if="isTextColumn(currentTab, col)">
+                  <div class="drawer-filter-label text-col-label">
+                    {{ col }}
+                    <el-tag size="small" type="info" effect="plain">文本</el-tag>
+                  </div>
+                  <el-select
+                    v-model="currentTab.textFilterValues[col]"
+                    multiple collapse-tags collapse-tags-tooltip filterable
+                    placeholder="选择值…"
+                    style="width: 100%;"
+                  >
+                    <el-option v-for="opt in (currentTab.textColumnOptions[col] || [])" :key="opt" :label="opt" :value="opt" />
+                  </el-select>
+                </template>
+                <template v-else>
+                  <div class="drawer-filter-label">{{ col }}</div>
+                  <div class="drawer-range-row">
+                    <el-input v-model="currentTab.filters[col].min" placeholder="最小值" clearable />
+                    <span class="drawer-range-sep">—</span>
+                    <el-input v-model="currentTab.filters[col].max" placeholder="最大值" clearable />
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- 所有文件模式 -->
+            <template v-else-if="filterScope === 'all'">
+              <div class="global-filter-header">
+                <span class="global-filter-tip">筛选条件将应用于所有已选文件</span>
+                <el-select
+                  v-model="globalFilterColumns"
+                  multiple filterable collapse-tags collapse-tags-tooltip
+                  placeholder="+ 添加筛选列"
+                  size="small"
+                  style="width: 180px;"
+                >
+                  <el-option
+                    v-for="col in allAvailableColumns"
+                    :key="col.name"
+                    :label="`${col.name} (${col.count}/${tabs.length})`"
+                    :value="col.name"
+                    :disabled="globalFilterColumns.includes(col.name)"
+                  />
+                </el-select>
               </div>
 
-              <el-row :gutter="20" class="filter-row">
-                <el-col :xs="24" :lg="18">
-                  <el-row :gutter="16">
-                    <el-col
-                      v-for="col in item.columns"
-                      :key="col"
-                      :xs="24"
-                      :sm="12"
-                      :md="8"
-                      class="filter-item-col"
-                    >
-                      <div class="filter-field">
-                        <span class="filter-label">{{ col }}</span>
-                        <el-input v-model="item.filters[col].min" class="range-input" placeholder="Min" clearable />
-                        <span class="separator">-</span>
-                        <el-input v-model="item.filters[col].max" class="range-input" placeholder="Max" clearable />
-                      </div>
-                    </el-col>
-                  </el-row>
-                </el-col>
-
-                <el-col :xs="24" :lg="6" class="filter-actions-col">
-                  <div class="filter-actions">
-                    <el-button type="primary" icon="Filter" @click="applyFilters(item)">提取数据</el-button>
-                    <el-button type="info" icon="Refresh" plain @click="clearFilters(item)">清除筛选</el-button>
-                    <el-button type="success" icon="Download" plain @click="exportToExcel(item)">导出 Excel</el-button>
+              <div v-for="col in globalFilterColumns" :key="col" class="drawer-filter-item">
+                <!-- 文本列：多选下拉 -->
+                <template v-if="isGlobalTextColumn(col)">
+                  <div class="drawer-filter-label text-col-label">
+                    {{ col }}
+                    <el-tag size="small" type="info" effect="plain">文本</el-tag>
+                    <el-icon class="remove-col-icon" @click="removeGlobalFilterCol(col)"><Close /></el-icon>
                   </div>
-                </el-col>
-              </el-row>
-            </div>
+                  <el-select
+                    v-model="globalTextFilterValues[col]"
+                    multiple collapse-tags collapse-tags-tooltip filterable
+                    placeholder="选择值…"
+                    style="width: 100%;"
+                  >
+                    <el-option v-for="opt in (getGlobalTextOptions(col) || [])" :key="opt" :label="opt" :value="opt" />
+                  </el-select>
+                </template>
+                <!-- 数值列：min-max -->
+                <template v-else>
+                  <div class="drawer-filter-label">
+                    {{ col }}
+                    <el-icon class="remove-col-icon" @click="removeGlobalFilterCol(col)"><Close /></el-icon>
+                  </div>
+                  <div class="drawer-range-row">
+                    <el-input v-model="globalFilters[col].min" placeholder="最小值" clearable />
+                    <span class="drawer-range-sep">—</span>
+                    <el-input v-model="globalFilters[col].max" placeholder="最大值" clearable />
+                  </div>
+                </template>
+              </div>
 
-            <div class="table-wrapper">
-              <el-table
-                :data="item.displayData"
-                border
-                stripe
-                height="550"
-                v-loading="item.loading"
-                element-loading-text="正在加载数据，请稍候..."
-              >
-                <el-table-column type="index" label="测点序列" width="80" align="center" fixed />
-                <el-table-column
-                  v-for="col in item.columns"
-                  :key="col"
-                  :prop="col"
-                  :label="col"
-                  min-width="140"
-                  align="center"
-                >
-                  <template #default="{ row }">
-                    {{ getDisplayValue(row, col) }}
-                  </template>
-                </el-table-column>
-              </el-table>
-            </div>
+              <el-empty v-if="globalFilterColumns.length === 0" description="请点击右上角添加筛选列" :image-size="50" />
+            </template>
 
-            <div class="pagination-container">
-              <el-pagination
-                v-model:current-page="item.currentPage"
-                v-model:page-size="item.pageSize"
-                :page-sizes="[100, 200, 500, 1000]"
-                layout="total, sizes, prev, pager, next, jumper"
-                :total="item.totalRows"
-                @size-change="(size) => handleSizeChange(item, size)"
-                @current-change="(page) => handleCurrentChange(item, page)"
-              />
+            <el-empty v-else description="请先选择文件" :image-size="60" />
+          </div>
+        </div>
+      </div>
+
+      <!-- 抽屉底栏 -->
+      <template #footer>
+        <div class="drawer-footer">
+          <el-button @click="filterDrawerVisible = false">取消</el-button>
+          <el-button type="info" plain @click="clearCurrentTabFilters">清除条件</el-button>
+          <el-button type="warning" plain @click="openPresetPicker">加载预设</el-button>
+          <el-button type="success" plain @click="saveCurrentAsPreset">保存为预设</el-button>
+          <el-button type="primary" icon="Filter" @click="applyDrawerFilters">应用筛选</el-button>
+        </div>
+      </template>
+    </el-drawer>
+
+    <el-dialog v-model="presetPickerVisible" title="选择预设" width="760px" append-to-body>
+      <el-table :data="presetList" border height="360px" v-loading="presetLoading" row-key="id" @row-dblclick="loadPresetFromRow">
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div class="preset-expand-detail">
+              <div class="preset-expand-row">
+                <span class="preset-expand-label">包含列：</span>
+                <template v-if="parseJson(row.columnsJson, []).length">
+                  <el-tag v-for="col in parseJson(row.columnsJson, [])" :key="col" size="small" style="margin: 2px 4px 2px 0;">{{ col }}</el-tag>
+                </template>
+                <span v-else style="color: #909399;">无</span>
+              </div>
+              <div class="preset-expand-row" style="margin-top: 8px;">
+                <span class="preset-expand-label">筛选条件：</span>
+                <template v-if="getFilterEntries(row.filtersJson).length">
+                  <div v-for="entry in getFilterEntries(row.filtersJson)" :key="entry.col" class="preset-filter-item">
+                    <span class="preset-filter-col">{{ entry.col }}</span>
+                    <span class="preset-filter-range">{{ entry.min || '—' }} ~ {{ entry.max || '—' }}</span>
+                  </div>
+                </template>
+                <span v-else style="color: #909399;">无</span>
+              </div>
             </div>
-          </el-tab-pane>
-        </el-tabs>
-      </el-card>
-    </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="name" label="预设名称" min-width="140" />
+        <el-table-column prop="scope" label="范围" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag size="small" :type="row.scope === 'all' ? '' : 'warning'">{{ row.scope === 'all' ? '全局' : '当前' }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="80" align="center">
+          <template #default="{ row }">
+            <el-button type="primary" size="small" plain @click="loadPresetFromRow(row)">加载</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <template #footer>
+        <el-button @click="presetPickerVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="fileDialogVisible" title="选择测井文件" width="70%" destroy-on-close>
       <div class="dialog-toolbar">
@@ -154,7 +327,7 @@
         v-loading="fileTableLoading"
         @selection-change="handleSelectionChange"
       >
-        <el-table-column type="selection" width="55" :reserve-selection="true" />
+        <el-table-column type="selection" width="55" />
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="fileName" label="文件名" show-overflow-tooltip />
         <el-table-column prop="totalRows" label="总行数" width="120" />
@@ -184,10 +357,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
-import { ElMessage } from 'element-plus'
-import { ArrowDown, Download } from '@element-plus/icons-vue'
-import { exportBatchZipStream, exportFilteredExcel, getFileList, getFilePage, getPageData, getFileLayers } from '@/api/file'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { ArrowDown, Download, Setting, Filter, Document, Files, Close } from '@element-plus/icons-vue'
+import { exportBatchZipStream, exportFilteredExcel, getFileList, getFilePage, getPageData, getFileLayers, getTextColumns, saveTextColumns, getDistinctValues } from '@/api/file'
+import { getDefaultColumns, listPresets, savePreset } from '@/api/filterPreset'
 
 const activeTabName = ref('')
 const tabs = ref([])
@@ -226,6 +400,381 @@ const globalFilters = ref({})
 const analysisResults = ref([])
 const analysisResultsEmpty = ref(false)
 const analysisLoading = ref(false)
+
+// ==================== 状态栏 + 抽屉相关 ====================
+const filterDrawerVisible = ref(false)
+const drawerTextConfigVisible = ref(false)
+const filterScope = ref('current')
+const textColumnSaving = ref(false)
+const globalFilterColumns = ref([])
+const globalTextFilterValues = ref({})
+
+// 全局筛选列变化时，自动初始化 filter 骨架，避免模板访问 undefined.min 崩溃
+watch(globalFilterColumns, (newCols, oldCols) => {
+  const added = newCols.filter(c => !(oldCols || []).includes(c))
+  const removed = (oldCols || []).filter(c => !newCols.includes(c))
+  added.forEach(col => {
+    if (!globalFilters.value[col]) {
+      globalFilters.value[col] = { min: '', max: '' }
+    }
+    if (!globalTextFilterValues.value[col]) {
+      globalTextFilterValues.value[col] = []
+    }
+  })
+  removed.forEach(col => {
+    delete globalFilters.value[col]
+    delete globalTextFilterValues.value[col]
+  })
+}, { deep: false })
+const presetList = ref([])           // 后端预设模板列表（供加载下拉）
+const presetSaving = ref(false)       // 保存预设按钮 loading
+const presetLoading = ref(false)      // 预设列表表格 loading
+const presetPickerVisible = ref(false)
+const presetNameInput = ref('')
+const conditionsPanelVisible = ref(false) // 状态栏条件面板展开状态
+
+// 汇总所有文件中被标记为文本列的列名
+const globalTextColumns = computed(() => {
+  const textCols = new Set()
+  tabs.value.forEach(tab => {
+    (tab.textColumns || []).forEach(col => textCols.add(col))
+  })
+  return textCols
+})
+
+const isGlobalTextColumn = (col) => globalTextColumns.value.has(col)
+
+// 全局文本列的去重选项缓存（跨文件聚合）
+const globalTextColumnOptions = ref({})
+
+// 获取全局文本列的聚合选项（所有已打开文件的值并集去重）
+const getGlobalTextOptions = (col) => {
+  // 如果缓存中没有该列的选项，聚合所有 tab 的已知选项
+  if (!globalTextColumnOptions.value[col]) {
+    const allVals = new Set()
+    tabs.value.forEach(tab => {
+      const opts = tab.textColumnOptions?.[col]
+      if (Array.isArray(opts)) {
+        opts.forEach(v => allVals.add(v))
+      }
+    })
+    globalTextColumnOptions.value[col] = Array.from(allVals).sort()
+  }
+  // 如果仍为空，异步加载（跨所有文件取并集）
+  if (!globalTextColumnOptions.value[col]?.length) {
+    loadGlobalTextOptions(col)
+  }
+  return globalTextColumnOptions.value[col] || []
+}
+
+// 异步加载全局文本列的聚合选项（首次加载时调用后端取并集）
+const loadGlobalTextOptions = async (col) => {
+  const allVals = new Set()
+  const promises = tabs.value.map(async (tab) => {
+    if (!tab.columns?.includes(col)) return
+    try {
+      const values = await getDistinctValues(tab.fileId, col)
+      if (Array.isArray(values)) {
+        values.forEach(v => allVals.add(v))
+      }
+    } catch (e) {
+      // 忽略单文件加载失败
+    }
+  })
+  await Promise.all(promises)
+  globalTextColumnOptions.value[col] = Array.from(allVals).sort()
+}
+
+const currentTab = computed(() => {
+  if (!activeTabName.value) return null
+  return tabs.value.find(t => t.name === activeTabName.value) || null
+})
+
+const totalOriginalRows = computed(() => {
+  return tabs.value.reduce((sum, t) => sum + (t.originalRows || t.fileTotalRows || 0), 0)
+})
+
+const totalFilteredRows = computed(() => {
+  return tabs.value.reduce((sum, t) => sum + (t.totalRows || 0), 0)
+})
+
+const retentionRate = computed(() => {
+  const orig = totalOriginalRows.value
+  if (!orig) return 100
+  return Math.round((totalFilteredRows.value / orig) * 1000) / 10
+})
+
+const activeFilterCount = computed(() => {
+  let count = 0
+  tabs.value.forEach(tab => {
+    if (tab.filters) {
+      for (const range of Object.values(tab.filters)) {
+        if ((range.min !== '' && range.min != null) || (range.max !== '' && range.max != null)) count++
+      }
+    }
+    if (tab.textFilterValues) {
+      for (const vals of Object.values(tab.textFilterValues)) {
+        if (Array.isArray(vals) && vals.length > 0) count++
+      }
+    }
+  })
+  return count
+})
+
+// 当前 tab 实际生效的条件列表（供状态栏面板展示）
+const currentActiveConditions = computed(() => {
+  const tab = currentTab.value
+  if (!tab) return []
+  const conditions = []
+  if (tab.filters) {
+    Object.entries(tab.filters).forEach(([col, range]) => {
+      if ((range.min !== '' && range.min != null) || (range.max !== '' && range.max != null)) {
+        conditions.push({ col, type: 'range', min: range.min, max: range.max })
+      }
+    })
+  }
+  if (tab.textFilterValues) {
+    Object.entries(tab.textFilterValues).forEach(([col, vals]) => {
+      if (Array.isArray(vals) && vals.length > 0) {
+        conditions.push({ col, type: 'text', values: vals })
+      }
+    })
+  }
+  return conditions
+})
+
+// 当前 tab 的生效条件计数
+const currentActiveFilterCount = computed(() => currentActiveConditions.value.length)
+
+// 全局筛选：汇总所有文件的列及其存在文件数
+const allAvailableColumns = computed(() => {
+  const colMap = new Map()
+  tabs.value.forEach(tab => {
+    (tab.columns || []).forEach(col => {
+      if (colMap.has(col)) {
+        colMap.get(col).count++
+      } else {
+        colMap.set(col, { name: col, count: 1 })
+      }
+    })
+  })
+  return Array.from(colMap.values()).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
+})
+
+// 切换到“所有文件”时，默认添加核心数值列
+// 切换到"所有文件"时，优先从后端配置加载默认列，无配置则动态猜测
+watch(filterScope, async (val) => {
+  if (val === 'all' && globalFilterColumns.value.length === 0) {
+    try {
+      const res = await getDefaultColumns()
+      if (res && res.columnsJson) {
+        // 配置优先：按配置加载，与文件实际存在列取交集
+        const configured = JSON.parse(res.columnsJson)
+        const available = allAvailableColumns.value.map(c => c.name)
+        const valid = configured.filter(c => available.includes(c))
+        globalFilterColumns.value = valid
+        valid.forEach(col => {
+          if (!globalFilters.value[col]) {
+            globalFilters.value[col] = { min: '', max: '' }
+          }
+        })
+        // 如果配置的列有些文件不存在，提示用户
+        const missing = configured.filter(c => !available.includes(c))
+        if (missing.length > 0) {
+          ElMessage.info(`以下默认列在当前文件中不存在，已自动跳过：${missing.join('、')}`)
+        }
+        return
+      }
+    } catch (error) {
+      console.error('加载默认筛选列配置失败，回退到动态猜测', error)
+    }
+    // 兼容兜底：动态猜测（所有文件都有的前6列）
+    const defaultCols = allAvailableColumns.value
+      .filter(c => c.count === tabs.value.length)
+      .map(c => c.name)
+      .slice(0, 6)
+    globalFilterColumns.value = defaultCols
+    defaultCols.forEach(col => {
+      if (!globalFilters.value[col]) {
+        globalFilters.value[col] = { min: '', max: '' }
+      }
+    })
+  }
+})
+
+const removeGlobalFilterCol = (col) => {
+  globalFilterColumns.value = globalFilterColumns.value.filter(c => c !== col)
+  if (globalFilters.value[col]) {
+    globalFilters.value[col] = { min: '', max: '' }
+  }
+}
+
+const clearAllFilters = () => {
+  tabs.value.forEach(tab => {
+    if (tab.filters) {
+      Object.keys(tab.filters).forEach(col => { tab.filters[col] = { min: '', max: '' } })
+    }
+    if (tab.textFilterValues) {
+      Object.keys(tab.textFilterValues).forEach(col => { tab.textFilterValues[col] = [] })
+    }
+    tab.hasFiltered = false
+    tab.currentPage = 1
+  })
+  fetchPageData(tabs.value.find(t => t.name === activeTabName.value) || tabs.value[0])
+  ElMessage.success('已清除所有筛选条件')
+}
+
+const clearCurrentTabFilters = () => {
+  const tab = currentTab.value
+  if (!tab) return
+  if (tab.filters) {
+    Object.keys(tab.filters).forEach(col => { tab.filters[col] = { min: '', max: '' } })
+  }
+  if (tab.textFilterValues) {
+    Object.keys(tab.textFilterValues).forEach(col => { tab.textFilterValues[col] = [] })
+  }
+  tab.hasFiltered = false
+  tab.currentPage = 1
+  ElMessage.success('已清除当前文件筛选条件')
+}
+
+const applyDrawerFilters = () => {
+  if (filterScope.value === 'all') {
+    // 全局模式：合并到所有文件，保留未在筛选列中的列的原值
+    const mergedFilters = JSON.parse(JSON.stringify(globalFilters.value))
+    const mergedTextFilters = JSON.parse(JSON.stringify(globalTextFilterValues.value))
+    tabs.value.forEach(tab => {
+      ;(tab.columns || []).forEach(col => {
+        if (!tab.filters[col]) tab.filters[col] = { min: '', max: '' }
+        if (!tab.textFilterValues[col]) tab.textFilterValues[col] = []
+      })
+      Object.entries(mergedFilters).forEach(([col, range]) => {
+        tab.filters[col] = { min: range.min || '', max: range.max || '' }
+      })
+      Object.entries(mergedTextFilters).forEach(([col, vals]) => {
+        tab.textFilterValues[col] = vals || []
+      })
+      tab.currentPage = 1
+      tab.hasFiltered = true
+      fetchPageData(tab)
+    })
+    ElMessage.success(`已应用全局筛选到 ${tabs.value.length} 个文件`)
+  } else {
+    // 单文件模式
+    const tab = currentTab.value
+    if (!tab) return
+    applyFilters(tab)
+  }
+  filterDrawerVisible.value = false
+}
+
+const openPresetPicker = async () => {
+  await loadPresets()
+  presetPickerVisible.value = true
+}
+
+const loadPresets = async () => {
+  presetLoading.value = true
+  try {
+    const res = await listPresets()
+    presetList.value = Array.isArray(res) ? res : []
+  } catch (error) {
+    console.error('加载预设失败', error)
+    presetList.value = []
+  } finally {
+    presetLoading.value = false
+  }
+}
+
+const parseJson = (value, fallback) => {
+  if (!value) return fallback
+  try {
+    return JSON.parse(value)
+  } catch {
+    return fallback
+  }
+}
+
+const getFilterEntries = (filtersJson) => {
+  const filters = parseJson(filtersJson, {})
+  return Object.entries(filters)
+    .filter(([, v]) => v && (v.min || v.max))
+    .map(([col, v]) => ({ col, min: v.min || '', max: v.max || '' }))
+}
+
+const saveCurrentAsPreset = () => {
+  const tab = currentTab.value
+  if (!tab) {
+    ElMessage.warning('请先选择一个文件')
+    return
+  }
+  presetNameInput.value = tab.title || '未命名预设'
+  ElMessageBox.prompt('请输入预设名称', '保存为预设', {
+    confirmButtonText: '保存',
+    cancelButtonText: '取消',
+    inputValue: presetNameInput.value,
+    inputPlaceholder: '如：高GR异常'
+  }).then(async ({ value }) => {
+    const name = (value || '').trim()
+    if (!name) {
+      ElMessage.warning('预设名称不能为空')
+      return
+    }
+    presetSaving.value = true
+    try {
+      const payload = {
+        name,
+        scope: filterScope.value,
+        columnsJson: JSON.stringify(filterScope.value === 'all' ? globalFilterColumns.value : (tab.columns || [])),
+        filtersJson: JSON.stringify(filterScope.value === 'all' ? globalFilters.value : (tab.filters || {})),
+        textFiltersJson: JSON.stringify(filterScope.value === 'all' ? globalTextFilterValues.value : (tab.textFilterValues || {}))
+      }
+      await savePreset(payload)
+      ElMessage.success('预设保存成功')
+      await loadPresets()
+    } catch (error) {
+      console.error(error)
+      ElMessage.error('预设保存失败')
+    } finally {
+      presetSaving.value = false
+    }
+  }).catch(() => {})
+}
+
+const applyPresetToCurrentTab = (row) => {
+  const tab = currentTab.value
+  if (!tab || !row) return
+  const columns = parseJson(row.columnsJson, [])
+  const filters = parseJson(row.filtersJson, {})
+  const textFilters = parseJson(row.textFiltersJson, {})
+
+  if (row.scope === 'all') {
+    // 先设置数据，再切换 scope，避免 watcher 异步回填空值覆盖预设数据
+    globalFilterColumns.value = columns
+    globalFilters.value = filters
+    globalTextFilterValues.value = textFilters
+    filterScope.value = 'all'
+  } else {
+    // 当前文件：merge 而非替换，保留所有列结构
+    ;(tab.columns || []).forEach(col => {
+      if (!tab.filters[col]) tab.filters[col] = { min: '', max: '' }
+      if (!tab.textFilterValues[col]) tab.textFilterValues[col] = []
+    })
+    Object.entries(filters).forEach(([col, range]) => {
+      tab.filters[col] = { min: range.min || '', max: range.max || '' }
+    })
+    Object.entries(textFilters).forEach(([col, vals]) => {
+      tab.textFilterValues[col] = vals || []
+    })
+    filterScope.value = 'current'
+  }
+  presetPickerVisible.value = false
+  ElMessage.success('预设已加载，可直接点击应用筛选')
+}
+
+const loadPresetFromRow = (row) => {
+  applyPresetToCurrentTab(row)
+}
 
 const filePageParams = reactive({
   current: 1,
@@ -338,6 +887,15 @@ const buildFiltersParam = (tabObj) => {
   const params = {}
   if (tabObj.filters) {
     for (const [col, range] of Object.entries(tabObj.filters)) {
+      // 文本列：传 values
+      if (tabObj.textColumns && tabObj.textColumns.includes(col)) {
+        const values = tabObj.textFilterValues?.[col]
+        if (values && values.length > 0) {
+          params[col] = { values }
+        }
+        continue
+      }
+      // 定量列：传 min/max
       if ((range.min !== '' && range.min !== null) || (range.max !== '' && range.max !== null)) {
         params[col] = {
           min: range.min !== '' ? Number(range.min) : null,
@@ -363,6 +921,8 @@ const fetchPageData = async (tabObj) => {
     tabObj.totalRows = res.total || 0
   } catch (error) {
     console.error(error)
+    tabObj.displayData = []
+    ElMessage.error('获取数据失败，请重试')
   } finally {
     tabObj.loading = false
   }
@@ -403,9 +963,15 @@ const handleFileSelect = () => {
         columns: parsedColumns,
         displayData: [],
         filters: Object.fromEntries(parsedColumns.map(col => [col, { min: '', max: '' }])),
+        textColumns: [],
+        textFilterValues: {},
+        textColumnOptions: {},
+        textConfigVisible: false,
         currentPage: 1,
         pageSize: 100,
         totalRows: fileInfo.totalRows || 0,
+        originalRows: fileInfo.totalRows || 0,
+        fileTotalRows: fileInfo.totalRows || 0,
         loading: false,
         hasFiltered: false
       }
@@ -413,8 +979,12 @@ const handleFileSelect = () => {
       tabs.value.push(newTab)
       // Vue 3 响应式：必须传递加入了 ref 数组后的代理对象，否则内部 loading 状态不更新
       fetchPageData(tabs.value[tabs.value.length - 1])
+      loadTextColumns(tabs.value[tabs.value.length - 1])
     }
   })
+
+  // 清除全局文本列选项缓存（tab 变化后需重新聚合）
+  globalTextColumnOptions.value = {}
 
   if (tabs.value.length > 0 && !tabs.value.some(tab => tab.name === activeTabName.value)) {
     activeTabName.value = tabs.value[tabs.value.length - 1].name
@@ -468,6 +1038,9 @@ const removeTab = (targetName) => {
   activeTabName.value = nextActiveName
   tabs.value = currentTabs.filter(tab => tab.name !== targetName)
 
+  // 清除全局文本列选项缓存
+  globalTextColumnOptions.value = {}
+
   if (tabs.value.length === 0) {
     analysisResults.value = []
     analysisResultsEmpty.value = false
@@ -500,6 +1073,11 @@ const clearFilters = (tabObj) => {
   ;(tabObj.columns || []).forEach(col => {
     tabObj.filters[col] = { min: '', max: '' }
   })
+  if (tabObj.textFilterValues) {
+    Object.keys(tabObj.textFilterValues).forEach(col => {
+      tabObj.textFilterValues[col] = []
+    })
+  }
   tabObj.hasFiltered = false
   tabObj.currentPage = 1
   fetchPageData(tabObj)
@@ -530,7 +1108,7 @@ const exportToExcel = async (tabObj) => {
   }
 
   try {
-    ElMessage.info('正在请求后端生成大数据过滤归档 Excel，这可能需要几十秒，请稍候...')
+    ElMessage.info('正在生成当前文件筛选结果，这可能需要几十秒，请稍候...')
     const blob = await exportFilteredExcel(tabObj.fileId, { filters: buildFiltersParam(tabObj) })
     const url = window.URL.createObjectURL(new Blob([blob]))
     const link = document.createElement('a')
@@ -547,6 +1125,16 @@ const exportToExcel = async (tabObj) => {
     console.error(error)
     ElMessage.error('报表导出失败，请检查网络设置或查看后台日志')
   }
+}
+
+// 导出当前激活页签的筛选结果（单文件 Excel）
+const handleExportCurrent = () => {
+  const tab = currentTab.value
+  if (!tab) {
+    ElMessage.warning('请先选择一个数据页签再导出')
+    return
+  }
+  exportToExcel(tab)
 }
 
 const handleBatchExport = async () => {
@@ -768,6 +1356,67 @@ const extractContinuousSegments = async () => {
   } finally {
     analysisLoading.value = false
   }
+}
+
+// ==================== 文本列筛选 ====================
+
+const loadTextColumns = async (tabObj) => {
+  try {
+    const mapping = await getTextColumns(tabObj.fileId)
+    if (mapping && Object.keys(mapping).length > 0) {
+      tabObj.textColumns = Object.keys(mapping)
+      tabObj.textColumns.forEach(col => {
+        if (!tabObj.textFilterValues[col]) tabObj.textFilterValues[col] = []
+      })
+      await Promise.all(tabObj.textColumns.map(col => loadTextColumnOptions(tabObj, col)))
+    }
+  } catch (error) {
+    // 没有配置过文本列，忽略
+  }
+}
+
+const loadTextColumnOptions = async (tabObj, colName) => {
+  try {
+    const values = await getDistinctValues(tabObj.fileId, colName)
+    tabObj.textColumnOptions[colName] = values || []
+  } catch (error) {
+    tabObj.textColumnOptions[colName] = []
+  }
+}
+
+const handleTextColumnConfigSave = async (tabObj) => {
+  if (!tabObj) return
+  if (!tabObj.textColumns || tabObj.textColumns.length === 0) {
+    ElMessage.warning('请至少选择一个文本列')
+    return
+  }
+  if (tabObj.textColumns.length > 10) {
+    ElMessage.warning('文本列最多支持 10 个')
+    return
+  }
+  textColumnSaving.value = true
+  try {
+    const mapping = {}
+    tabObj.textColumns.forEach((col, idx) => { mapping[col] = `text_col_${idx + 1}` })
+    const res = await saveTextColumns(tabObj.fileId, mapping)
+    tabObj.textColumns.forEach(col => {
+      if (!tabObj.textFilterValues[col]) tabObj.textFilterValues[col] = []
+    })
+    for (const col of tabObj.textColumns) {
+      await loadTextColumnOptions(tabObj, col)
+    }
+    ElMessage.success(res || '文本列配置已保存，数据回填完成')
+    // 清除全局文本列选项缓存，因为配置变更了
+    globalTextColumnOptions.value = {}
+  } catch (error) {
+    ElMessage.error(error.message || '文本列配置保存失败')
+  } finally {
+    textColumnSaving.value = false
+  }
+}
+
+const isTextColumn = (tabObj, colName) => {
+  return tabObj.textColumns && tabObj.textColumns.includes(colName)
 }
 </script>
 
@@ -1210,4 +1859,367 @@ const extractContinuousSegments = async () => {
     width: 100%;
   }
 }
+
+/* ==================== 文本列配置 ==================== */
+.text-config-section {
+  border: 1px dashed var(--el-border-color-light);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.text-config-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  cursor: pointer;
+  background: var(--el-fill-color-lighter);
+  transition: background 0.2s;
+}
+
+.text-config-header:hover {
+  background: var(--el-fill-color);
+}
+
+.text-config-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+
+.expand-icon {
+  margin-left: auto;
+  transition: transform 0.3s;
+}
+
+.expand-icon.expanded {
+  transform: rotate(180deg);
+}
+
+.text-col-label {
+  color: var(--el-color-primary) !important;
+  font-weight: 600;
+}
+
+/* ==================== 状态栏 ==================== */
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+}
+
+.status-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
+.status-sep {
+  color: var(--el-border-color);
+  margin: 0 2px;
+}
+
+.status-item {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.status-item strong {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+}
+
+.status-active strong {
+  color: var(--el-color-primary);
+}
+
+.rate-warn {
+  color: var(--el-color-warning) !important;
+}
+
+/* ==================== 工具栏 ==================== */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.filter-badge {
+  margin-left: 4px;
+}
+
+.filter-badge :deep(.el-badge__content) {
+  background: var(--el-color-primary);
+}
+
+/* ==================== 空状态 ==================== */
+.empty-state-main {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+
+/* ==================== 抽屉 ==================== */
+.drawer-body {
+  padding: 0;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.drawer-section {
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.drawer-section:last-child {
+  border-bottom: none;
+}
+
+.drawer-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  cursor: pointer;
+  background: var(--el-fill-color-lighter);
+  transition: background 0.2s;
+}
+
+.drawer-section-title:hover {
+  background: var(--el-fill-color);
+}
+
+.drawer-section-body {
+  padding: 20px;
+}
+
+/* 筛选范围栏 */
+.filter-scope-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.scope-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+  background: var(--el-fill-color-lighter);
+}
+
+.scope-tab:hover {
+  color: var(--el-text-color-primary);
+  background: var(--el-fill-color);
+}
+
+.scope-tab.active {
+  color: var(--el-color-primary);
+  border-bottom-color: var(--el-color-primary);
+  background: var(--el-bg-color);
+}
+
+.scope-tab-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--el-text-color-secondary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scope-tab.active .scope-tab-sub {
+  color: var(--el-color-primary-light-5);
+}
+
+/* 全局筛选头部 */
+.global-filter-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 20px;
+  padding: 10px 14px;
+  background: var(--el-color-info-light-9);
+  border-radius: 8px;
+  border-left: 3px solid var(--el-color-info);
+}
+
+.global-filter-tip {
+  font-size: 13px;
+  color: var(--el-color-info);
+}
+
+.remove-col-icon {
+  cursor: pointer;
+  color: var(--el-text-color-secondary);
+  font-size: 14px;
+  margin-left: 4px;
+  transition: color 0.2s;
+}
+
+.remove-col-icon:hover {
+  color: var(--el-color-danger);
+}
+
+.drawer-filter-item {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--el-border-color-extra-light);
+}
+
+.drawer-filter-item:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.drawer-filter-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.drawer-range-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.drawer-range-sep {
+  color: var(--el-text-color-secondary);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.drawer-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 0 4px;
+}
+
+.condition-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.condition-toggle-icon {
+  transition: transform 0.2s;
+}
+
+.condition-toggle-icon.expanded {
+  transform: rotate(180deg);
+}
+
+.conditions-panel {
+  margin: 8px 0 16px;
+  padding: 12px 14px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.condition-tag {
+  max-width: 100%;
+}
+
+.conditions-empty {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.preset-picker-table .el-table__row {
+  cursor: pointer;
+}
+
+/* ==================== 预设展开详情 ==================== */
+.preset-expand-detail {
+  padding: 6px 16px 8px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.preset-expand-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.preset-expand-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  line-height: 24px;
+}
+
+.preset-filter-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 12px;
+  padding: 2px 8px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.preset-filter-col {
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+
+.preset-filter-range {
+  color: var(--el-text-color-regular);
+}
+
 </style>

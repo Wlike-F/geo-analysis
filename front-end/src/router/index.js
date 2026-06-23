@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Layout from '@/layout/index.vue'
 import { getAccessToken } from '@/utils/token'
+import { useUserStore } from '@/store/user'
 
 const routes = [
   {
@@ -31,12 +32,6 @@ const routes = [
         meta: { title: '数据源管理', icon: 'FolderOpened' }
       },
       {
-        path: 'files',
-        name: 'Files',
-        component: () => import('@/views/files/index.vue'),
-        meta: { title: '测井数据看板', icon: 'Document' }
-      },
-      {
         path: 'extract',
         name: 'Extract',
         component: () => import('@/views/extract/index.vue'),
@@ -47,7 +42,7 @@ const routes = [
         path: 'user',
         name: 'User',
         component: () => import('@/views/user/index.vue'),
-        meta: { title: '用户管理', icon: 'User' }
+        meta: { title: '用户管理', icon: 'User', requireAdmin: true }
       },
       {
         path: 'instructions',
@@ -87,9 +82,16 @@ router.beforeEach((to, from, next) => {
   const token = getAccessToken()
   if (to.path !== '/login' && to.path !== '/register' && !token) {
     next('/login')
-  } else {
-    next()
+    return
   }
+  if (to.meta.requireAdmin) {
+    const userStore = useUserStore()
+    if (!userStore.isAdmin) {
+      next('/dashboard')
+      return
+    }
+  }
+  next()
 })
 
 export default router

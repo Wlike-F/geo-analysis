@@ -32,12 +32,12 @@
                 </div>
               </div>
 
-              <div class="custom-divider"></div>
-
-              <div class="custom-section-title custom-mt-3">
+              <div class="custom-section-title custom-mt-3 toggle-section" @click="toggleSection('channels')">
+                <el-icon class="toggle-arrow" :class="{ expanded: sectionExpanded.channels }"><ArrowRight /></el-icon>
                 <el-icon><Connection /></el-icon> 曲线显示通道
+                <span class="toggle-hint">{{ sectionExpanded.channels ? '收起' : '展开' }}</span>
               </div>
-              <div class="px-1 mt-2" style="margin-bottom: 14px;">
+              <div v-show="sectionExpanded.channels" class="px-1 mt-2" style="margin-bottom: 14px;">
                 <el-select
                   v-model="selectedChannels"
                   class="full-width custom-select-multi"
@@ -56,12 +56,12 @@
                 </el-select>
               </div>
 
-              <div class="custom-divider"></div>
-
-              <div class="custom-section-title custom-mt-3">
+              <div class="custom-section-title custom-mt-3 toggle-section" @click="toggleSection('stats')">
+                <el-icon class="toggle-arrow" :class="{ expanded: sectionExpanded.stats }"><ArrowRight /></el-icon>
                 <el-icon><DataAnalysis /></el-icon> 统计与特征通道
+                <span class="toggle-hint">{{ sectionExpanded.stats ? '收起' : '展开' }}</span>
               </div>
-              <div class="px-1 mt-2" style="margin-bottom: 14px;">
+              <div v-show="sectionExpanded.stats" class="px-1 mt-2" style="margin-bottom: 14px;">
                 <el-select
                   v-model="selectedStatsChannels"
                   class="full-width custom-select-multi"
@@ -78,12 +78,12 @@
                 </el-select>
               </div>
 
-              <div class="custom-divider"></div>
-
-              <div class="custom-section-title custom-mt-3">
+              <div class="custom-section-title custom-mt-3 toggle-section" @click="toggleSection('conditions')">
+                <el-icon class="toggle-arrow" :class="{ expanded: sectionExpanded.conditions }"><ArrowRight /></el-icon>
                 <el-icon><Filter /></el-icon> 异常识别条件
+                <span class="toggle-hint">{{ sectionExpanded.conditions ? '收起' : '展开' }}</span>
               </div>
-              <section class="anomaly-controls">
+              <section v-show="sectionExpanded.conditions" class="anomaly-controls">
                 <div v-for="(cond, idx) in anomalyConditions" :key="idx" class="condition-item">
                   <el-row :gutter="8" class="condition-row" align="middle">
                     <el-col :span="8">
@@ -132,25 +132,6 @@
                 </div>
               </section>
 
-              <div class="custom-divider"></div>
-              
-              <div class="custom-section-title custom-mt-3">
-                <el-icon><Odometer /></el-icon> 深度区间控制 (m)
-              </div>
-              <div class="depth-slider-container px-1">
-                <el-slider
-                  v-model="depthRange"
-                  range
-                  :min="minDepth"
-                  :max="maxDepth"
-                  :step="10"
-                  class="custom-slider"
-                  @change="updateDepthZoom"
-                />
-                <div class="custom-range-text" v-if="maxDepth > 0">{{ depthRange[0] }} m <span>-</span> {{ depthRange[1] }} m</div>
-                <div class="custom-range-text" v-else>暂无数据深度信息</div>
-              </div>
-
             </el-form>
           </div>
           
@@ -158,7 +139,7 @@
             <el-row :gutter="12" class="custom-action-row">
               <el-col :span="12">
                 <el-button class="full-width custom-btn-orange" :disabled="anomalySegments.length === 0" @click="showAnomalyDialog = true">
-                  <el-icon><List /></el-icon> 查看明细 ({{ anomalySegments.length }})
+                  <el-icon><List /></el-icon> 明细({{ anomalySegments.length }})
                 </el-button>
               </el-col>
               <el-col :span="12">
@@ -167,9 +148,6 @@
                 </el-button>
               </el-col>
             </el-row>
-            <el-button class="full-width custom-btn-indigo" :disabled="!selectedFile" @click="handleDraw">
-              <el-icon><DataAnalysis /></el-icon> 执行分析与渲染
-            </el-button>
             <div class="custom-export-link-wrapper">
               <el-button class="full-width custom-btn-indigo custom-export-btn" :disabled="!selectedFile || loading" @click="handleExport">
                 <el-icon><Picture /></el-icon> 导出高清图片
@@ -196,6 +174,9 @@
               <el-tag v-else type="info" size="small" effect="plain" round>
                 等待分析结果
               </el-tag>
+              <el-button type="primary" :disabled="!selectedFile" @click="handleDraw" :loading="loading">
+                <el-icon><DataAnalysis /></el-icon> 执行分析
+              </el-button>
             </div>
           </template>
 
@@ -214,6 +195,16 @@
                 <div v-if="!hasChartData" class="chart-hint">请选择参数后点击“执行分析与渲染”生成图表。</div>
               </div>
             </template>
+
+            <div v-if="hasChartData" class="depth-slider-bar">
+              <div class="depth-slider-label">
+                <el-icon><Odometer /></el-icon>
+                <span>深度区间控制 (m)</span>
+              </div>
+              <el-slider v-model="depthRange" range :min="minDepth" :max="maxDepth" :step="10"
+                class="custom-slider" @change="updateDepthZoom" />
+              <div class="custom-range-text" v-if="maxDepth > 0">{{ depthRange[0] }} m &mdash; {{ depthRange[1] }} m</div>
+            </div>
           </div>
         </el-card>
       </el-col>
@@ -249,9 +240,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, shallowRef, onBeforeUnmount, onActivated, computed } from 'vue'
+import { ref, reactive, onMounted, nextTick, shallowRef, onBeforeUnmount, onActivated, computed } from 'vue'
 import * as echarts from 'echarts'
-import { Setting, MagicStick, Download, DataAnalysis, Plus, List, Delete, Refresh, Filter, Odometer, Picture, Document, Connection } from '@element-plus/icons-vue'
+import { Setting, Download, DataAnalysis, Plus, List, Delete, Refresh, Filter, Odometer, Picture, Document, Connection, ArrowRight } from '@element-plus/icons-vue'
 import { getFileList, getEchartsData } from '@/api/file'
 import { ElMessage } from 'element-plus'
 
@@ -267,6 +258,10 @@ const anomalyConditions = ref([{ channel: '', operator: '>', threshold: 0 }])
 const minContinuousPoints = ref(1)
 const anomalySegments = ref([])
 const showAnomalyDialog = ref(false)
+
+// 折叠面板
+const sectionExpanded = reactive({ channels: false, stats: false, conditions: false })
+const toggleSection = (key) => { sectionExpanded[key] = !sectionExpanded[key] }
 const loading = ref(false)
 const chartRef = ref(null)
 const chartInstance = shallowRef(null)
@@ -312,7 +307,8 @@ const fetchFileList = async () => {
       if (!chartInstance.value) initChart()
     }
   } catch (error) {
-    ElMessage.error('无法连接后端获取文件列表')
+    console.error('获取文件列表失败', error)
+    ElMessage.error('获取文件列表失败，请检查网络连接')
     if (!chartInstance.value) initChart()
   }
 }
@@ -341,7 +337,7 @@ const handleFileChange = () => {
   }
 
   if (chartInstance.value) {
-    chartInstance.value.clear()
+    try { chartInstance.value.clear() } catch { /* may be disposed */ }
     initChart()
   }
 }
@@ -422,9 +418,9 @@ const extractAnomalySegments = () => {
     return {
       dataArr: targetKey ? rawChartData.value[targetKey] : null,
       operator: cond.operator,
-      threshold: cond.threshold || 0
+      threshold: cond.threshold
     }
-  }).filter(item => item && item.dataArr)
+  }).filter(item => item && item.dataArr && item.threshold != null)
 
   const statsData = selectedStatsChannels.value.map(col => {
     const targetKey = Object.keys(rawChartData.value).find(key => key.toUpperCase() === col.toUpperCase())
@@ -518,20 +514,27 @@ const handleDraw = async () => {
       rawChartData.value.DEPTH = depths
 
       if (depths.length > 0) {
-        minDepth.value = Math.floor(Math.min(...depths))
-        maxDepth.value = Math.ceil(Math.max(...depths))
-        depthRange.value = [minDepth.value, maxDepth.value]
+        let minVal = Infinity, maxVal = -Infinity
+        for (let i = 0; i < depths.length; i++) {
+          const v = Number(depths[i])
+          if (!Number.isFinite(v)) continue
+          if (v < minVal) minVal = v
+          if (v > maxVal) maxVal = v
+        }
+        if (Number.isFinite(minVal) && Number.isFinite(maxVal)) {
+          minDepth.value = Math.floor(minVal)
+          maxDepth.value = Math.ceil(maxVal)
+          depthRange.value = [minDepth.value, maxDepth.value]
+        }
       }
 
       extractAnomalySegments()
-      ElMessage.success(`加载成功，发现 ${anomalySegments.value.length} 处异常。`)
       nextTick(() => {
-        initChart()
-        if (chartInstance.value) {
-          chartInstance.value.resize()
-        }
+        ensureChartInstance()
+        if (chartInstance.value) chartInstance.value.resize()
         updateChartData()
         updateDepthZoom()
+        ElMessage.success(`加载成功，发现 ${anomalySegments.value.length} 处异常`)
       })
     }
   } catch (error) {
@@ -565,9 +568,9 @@ const exportAnomalyData = () => {
   const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
   const link = document.createElement('a')
   link.href = URL.createObjectURL(blob)
-  link.download = `异常测段分析结果_${selectedFile.value}.csv`
+  link.download = `异常测段分析结果_${selectedFile.value || '未知'}.csv`
   link.click()
-  URL.revokeObjectURL(link.href)
+  setTimeout(() => URL.revokeObjectURL(link.href), 100)
 }
 
 const handleExport = () => {
@@ -578,7 +581,7 @@ const handleExport = () => {
     backgroundColor: '#fff'
   })
   const link = document.createElement('a')
-  link.download = `测井多道异常标定_${selectedFile.value}.png`
+  link.download = `测井多道异常标定_${selectedFile.value || '未知'}.png`
   link.href = url
   link.click()
 }
@@ -718,7 +721,8 @@ const updateChartData = () => {
   }, true)
 
   chartInstance.value.off('datazoom')
-  chartInstance.value.on('datazoom', debounce(() => {
+  if (datazoomHandler) { datazoomHandler.cancel(); datazoomHandler = null }
+  datazoomHandler = debounce(() => {
     if (!chartInstance.value) return
     const option = chartInstance.value.getOption()
     if (option?.dataZoom?.length) {
@@ -740,22 +744,25 @@ const updateChartData = () => {
         ]
       }
     }
-  }, 100))
+  }, 100)
+  chartInstance.value.on('datazoom', datazoomHandler)
 }
 
 const debounce = (fn, delay) => {
   let timer = null
-  return function (...args) {
+  const debounced = function (...args) {
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => fn.apply(this, args), delay)
   }
+  debounced.cancel = () => { if (timer) { clearTimeout(timer); timer = null } }
+  return debounced
 }
 
 const handleResize = debounce(() => {
-  if (chartInstance.value) {
-    chartInstance.value.resize()
-  }
+  if (chartInstance.value) chartInstance.value.resize()
 }, 200)
+
+let datazoomHandler = null
 
 onMounted(() => {
   fetchFileList()
@@ -768,6 +775,7 @@ onActivated(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize)
+  if (datazoomHandler) { datazoomHandler.cancel(); datazoomHandler = null }
   if (chartInstance.value) {
     chartInstance.value.dispose()
     chartInstance.value = null
@@ -778,18 +786,20 @@ onBeforeUnmount(() => {
 <style scoped>
 .visualization-container {
   height: 100%;
+  overflow: hidden;
 }
 
 .visualization-layout {
-  min-height: 100%;
+  height: 100%;
   display: flex;
   align-items: stretch;
+  overflow: hidden;
 }
 
 .visualization-layout > .el-col {
   display: flex;
   flex-direction: column;
-  margin-bottom: 20px;
+  overflow: hidden;
 }
 
 .panel-header,
@@ -830,9 +840,15 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  height: 100%;
+}
+.custom-panel :deep(.el-card__body) {
   flex: 1;
-  height: auto;
-  min-height: calc(100vh - 128px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  padding: 0 !important;
 }
 .custom-panel-header {
   padding: 1rem 1.25rem;
@@ -860,29 +876,71 @@ onBeforeUnmount(() => {
   margin: 0.375rem 0 0 0;
 }
 .custom-panel-body {
-  flex: 1;
+  flex: 1 1 0;
   padding: 1.35rem 1.1rem 1rem;
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-  gap: 1.75rem;
+  overflow-y: auto;
+  min-height: 0;
 }
 .depth-slider-container {
   overflow: hidden;
   padding-inline: 12px;
 }
 .custom-section-title {
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: #374151;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1f2937;
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  margin-bottom: 0.5rem;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
 }
 .custom-section-title .el-icon {
-  color: #9ca3af;
-  font-size: 0.75rem;
+  color: var(--el-color-primary);
+  font-size: 1rem;
+}
+/* 折叠区块 */
+.toggle-section {
+  cursor: pointer;
+  user-select: none;
+  padding: 8px 10px;
+  margin: 4px -8px;
+  border-radius: 8px;
+  transition: background 0.2s, box-shadow 0.2s;
+  border: 1px solid transparent;
+}
+.toggle-section:hover {
+  background: var(--el-fill-color-light);
+  border-color: var(--el-border-color-lighter);
+}
+.toggle-arrow {
+  font-size: 14px !important;
+  transition: transform 0.25s;
+  color: #4b5563 !important;
+  flex-shrink: 0;
+}
+.toggle-arrow.expanded {
+  transform: rotate(90deg);
+}
+.toggle-hint {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+  font-weight: 400;
+}
+/* 图表底部深度滑块 */
+.depth-slider-bar {
+  padding: 12px 16px 4px;
+  border-top: 1px solid var(--el-border-color-lighter);
+  margin-top: 8px;
+  flex-shrink: 0;
+}
+.depth-slider-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #374151;
+  margin-bottom: 8px;
 }
 .custom-form-item {
   margin-bottom: 0.875rem;
@@ -982,7 +1040,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
-  overflow: hidden;
+  flex-shrink: 0;
 }
 .custom-action-row {
   margin-bottom: 0;
@@ -1149,9 +1207,7 @@ onBeforeUnmount(() => {
 }
 
 .chart-panel {
-  flex: 1;
-  height: auto;
-  min-height: calc(100vh - 128px);
+  height: 100%;
   display: flex;
   flex-direction: column;
 }

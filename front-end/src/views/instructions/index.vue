@@ -190,218 +190,47 @@ const iconMap = {
   PriceTag,
   Lock,
   Bell,
-  DocumentCopy,
-  Lightbulb: Bell
+  DocumentCopy
 }
 
-const fallbackData = [
+const SKELETON_DATA = [
   {
-    id: 'local-1',
-    title: '新手入门：首次上传测井文件',
+    id: 'skel-1',
+    title: '系统使用指引',
     icon: 'Reading',
     category: 'quickstart',
-    summary: '本系统支持 TXT、CSV、Excel 格式的测井文件上传与智能解析。首次使用建议按以下步骤操作。',
+    summary: '本系统提供测井文件上传、解析、筛选、导出、异常分析和可视化功能。',
     steps: [
-      '登录系统后，点击左侧菜单进入"数据源管理"页面。',
-      '点击"上传文件"按钮，选择本地的 TXT、CSV 或 Excel 测井文件（单次上传上限 50MB）。',
-      '系统自动进入预览阶段，识别表头并生成列名映射建议，请检查每一列的映射是否正确。',
-      '确认映射无误后点击"确认上传"，系统将在后台异步解析，状态会显示为"解析中"。',
-      '解析完成后状态变为"成功"，此时可进入"测井数据看板"查看解析结果。'
+      '进入”数据源管理”上传测井文件（支持 TXT、CSV、Excel）。',
+      '文件解析完成后进入”异常测段提取”进行数据筛选与导出。',
+      '进入”异常测段可视化”查看多道曲线与异常段高亮标注。'
     ],
-    note: 'TXT 文件默认使用 GBK 编码读取，CSV 文件自动检测编码，Excel 文件无需关注编码问题。',
-    content: '',
-    links: [{ label: '去数据源管理', path: '/datasource' }, { label: '去测井数据看板', path: '/files' }]
+    links: [{ label: '去首页概览', path: '/dashboard' }]
   },
   {
-    id: 'local-2',
-    title: '服务器目录批量扫描',
+    id: 'skel-2',
+    title: '常用功能入口',
     icon: 'PriceTag',
     category: 'feature',
-    summary: '如果测井文件已存放在服务器本地目录中，可以使用批量扫描功能一次性导入多个文件。',
+    summary: '数据源管理、异常测段提取、异常测段可视化是三个核心功能页面。',
     steps: [
-      '在"数据源管理"页面找到"服务器扫描"区域。',
-      '输入服务器上存放测井文件的绝对路径（如 E:\\data\\welllog）。',
-      '系统自动递归扫描目录下所有 .txt、.csv、.xls、.xlsx 文件。',
-      '已存在同名记录的文件会自动跳过，避免重复导入。',
-      '扫描完成后所有新文件将自动提交后台异步解析。'
+      '数据源管理：上传文件、管理解析状态、配置地质分层。',
+      '异常测段提取：多文件筛选、数值范围过滤、文本列多选、预设模板一键加载。',
+      '异常测段可视化：多通道曲线图、异常测段高亮、CSV/PNG 导出。'
     ],
-    note: '请确保路径正确且后端进程对该目录有读取权限。扫描大量文件时请耐心等待。',
-    content: '',
-    links: [{ label: '去数据源管理', path: '/datasource' }]
+    links: [{ label: '去数据源管理', path: '/datasource' }, { label: '去异常测段提取', path: '/extract' }]
   },
   {
-    id: 'local-3',
-    title: '测井数据看板与筛选',
-    icon: 'Lock',
-    category: 'feature',
-    summary: '数据看板是浏览和筛选测井数据的核心页面，支持动态列展示和范围筛选。',
-    steps: [
-      '进入"测井数据看板"，系统自动加载已解析的文件列表。',
-      '点击某个文件名即可展开该文件的测井数据表格，表格列根据文件实际列名动态生成。',
-      '每一列都支持设置最小值和最大值进行范围筛选，输入后点击"提取数据"查看筛选结果。',
-      '支持切换每页显示数量（100/200/500/1000 条），翻页浏览全部数据。',
-      '筛选完成后可以导出为 Excel 或批量 ZIP 格式。'
-    ],
-    note: '筛选条件为空时将显示全部数据。如果文件刚上传还在解析中，请稍后再刷新查看。',
-    content: '',
-    links: [{ label: '去测井数据看板', path: '/files' }]
-  },
-  {
-    id: 'local-4',
-    title: '异常测段提取',
-    icon: 'Bell',
-    category: 'feature',
-    summary: '异常测段提取功能用于自动识别满足条件的连续深度区间，支持多文件批量分析。',
-    steps: [
-      '先在"异常测段提取"页面选择需要分析的文件（支持同时选择多个文件）。',
-      '为每个文件设置筛选条件：选择目标列（如 GR），设定最小值和最大值范围。',
-      '多文件模式下可以使用统一的全局筛选条件一键应用到所有已选文件。',
-      '点击"提取数据"后系统自动分析，识别满足条件的连续测段。',
-      '结果展示每个异常段的顶界深度、底界深度、厚度等关键信息。',
-      '支持将提取结果导出为 Excel 或 ZIP 格式。'
-    ],
-    note: '提取功能只做数据分析展示，不会修改原始解析数据。',
-    content: '',
-    links: [{ label: '去异常测段提取', path: '/extract' }]
-  },
-  {
-    id: 'local-5',
-    title: '异常测段可视化（ECharts 曲线图）',
-    icon: 'Lightbulb',
-    category: 'feature',
-    summary: '可视化页面提供多通道测井曲线的交汇图与异常段高亮标注，大数据量自动降采样。',
-    steps: [
-      '进入"异常测段可视化"页面，从下拉框选择目标测井文件。',
-      '选择"曲线显示通道"（最多 3 条），如 AC、GR、DEN。',
-      '选择"统计通道"，系统将计算异常段内这些通道的极值和均值。',
-      '配置"异常识别条件"：选择通道、运算符（大于/小于）和阈值。支持添加多个条件。',
-      '设置"最短连续测点数"以过滤零散噪点，然后点击"执行分析与渲染"。',
-      '图表区域会显示多道曲线，异常段以红色半透明区域高亮标注。',
-      '可以通过底部滑块或鼠标滚轮缩放深度区间，点击"查看明细"查看异常段列表。'
-    ],
-    note: '可视化结果仅用于分析展示与导出，不会修改原始数据。大数据量文件后端会自动降采样以保证渲染速度。',
-    content: '',
-    links: [{ label: '去异常测段可视化', path: '/visualization' }]
-  },
-  {
-    id: 'local-6',
-    title: '数据导出指南',
-    icon: 'DocumentCopy',
-    category: 'feature',
-    summary: '系统支持 Excel、CSV、ZIP 等多种导出方式，单文件导出上限为 100 万行。',
-    steps: [
-      '单文件导出：在看板中对某个文件完成筛选后，点击"导出 Excel"按钮下载 .xlsx 文件。',
-      '批量 Excel 导出：选择多个文件后点击"批量导出"，生成包含多个 Sheet 的 Excel 文件。',
-      '批量 ZIP 导出：选择多个文件后点击"批量 ZIP"，每个文件的筛选结果分别生成 Excel 并打包下载。',
-      '异常段 CSV 导出：在可视化页面点击"导出 CSV"，下载异常测段的明细数据。',
-      '图表图片导出：在可视化页面点击"导出高清图片"，下载 PNG 格式的曲线图。'
-    ],
-    note: 'Excel 单个工作表上限为 1,048,576 行。超大数据建议分批筛选导出或使用 ZIP 格式。',
-    content: '',
-    links: [{ label: '去测井数据看板', path: '/files' }]
-  },
-  {
-    id: 'local-11',
-    title: '地质分层配置',
-    icon: 'PriceTag',
-    category: 'feature',
-    summary: '为测井文件配置地层分段（层名、顶深、底深），导出时自动附加层位列，异常提取时跨层段自动切割。',
-    steps: [
-      '在"数据源管理"页面找到目标文件，点击操作列的"分层"按钮打开分层配置对话框。',
-      '手动输入：在可编辑表格中逐行填写层位名称、顶深（m）、底深（m）和备注，点击"保存分层配置"。',
-      '从文件导入：点击"从文件导入"上传 Excel/CSV/TXT 文件，系统自动识别表头中的"层"、"顶"、"底"关键词定位列。',
-      '如果导入文件包含多口井的数据，系统会弹出井名选择对话框，选择当前文件对应的井名后再导入。',
-      '跨文件复制：配好一口井后点击"复制到其他文件"，勾选同区块其他井，层名结构会被复制，深度值保持不变。',
-      '配置完成后，导出 Excel 时会自动追加"层位"列；异常测段提取时如果测段跨越分层边界会自动切割为多段。'
-    ],
-    note: '分层边界采用左闭右开规则：顶深 <= depth < 底深。建议下一层的顶深 = 上一层的底深，避免重叠或空隙。',
-    content: '',
-    links: [{ label: '去数据源管理', path: '/datasource' }]
-  },
-  {
-    id: 'local-12',
-    title: '运行日志查看',
-    icon: 'Bell',
-    category: 'feature',
-    summary: '在系统设置中实时查看后端服务的运行日志，方便排查报错和监控运行状态。',
-    steps: [
-      '进入"系统设置"页面，点击左侧导航的"运行日志"选项卡。',
-      '日志面板以深色终端风格显示后端实时日志，包括时间戳、日志级别、来源类名和消息内容。',
-      '通过顶部下拉框可按级别筛选：ALL（全部）、INFO（普通信息）、WARN（警告）、ERROR（错误）。',
-      '日志每 3 秒自动刷新，新日志自动滚动到底部，最新内容始终可见。',
-      '点击"刷新日志"可立即手动拉取最新日志，点击"清空显示"清除当前面板内容（不影响后端缓冲）。'
-    ],
-    note: '运行日志保存在内存环形缓冲中（最多 500 条），重启应用后清空。如需持久化日志请查看后端控制台输出。',
-    content: '',
-    links: [{ label: '去系统设置', path: '/settings' }]
-  },
-  {
-    id: 'local-7',
-    title: '字典映射参数配置',
-    icon: 'PriceTag',
-    category: 'feature',
-    summary: '字典映射用于将不同来源测井文件中的列名归一化为系统标准列名。',
-    steps: [
-      '进入"字典映射参数"页面，查看当前所有映射规则。',
-      '每条规则包含：标准列名（如 DEPTH）、中文含义（如 测量深度）、别名列表（如 dept,tvd,深度）。',
-      '上传文件时系统会自动匹配别名，将识别到的列名映射为标准列名。',
-      '可以新增自定义映射规则，例如添加 SONIC 列映射到 AC。',
-      '可以编辑现有规则的别名列表，增加更多别名以提高匹配率。'
-    ],
-    note: '核心列（如 DEPTH）受保护无法删除。修改映射规则后只对新上传的文件生效。',
-    content: '',
-    links: [{ label: '去字典映射参数', path: '/dictionary' }]
-  },
-  {
-    id: 'local-8',
-    title: '文件解析失败或数据乱码',
+    id: 'skel-3',
+    title: '遇到问题？',
     icon: 'Bell',
     category: 'faq',
-    summary: '遇到解析问题时，请按以下步骤排查：检查文件状态、编码、脏数据和列数匹配。',
+    summary: '如遇文件解析失败、导出异常或页面报错，请按以下方式排查。',
     steps: [
-      '检查文件状态：在数据源管理页面查看文件的解析状态是否为"失败"（红色标记）。',
-      '编码问题：TXT 文件默认 GBK 编码读取，如果文件实际是 UTF-8 编码，中文可能乱码。建议另存为 GBK 后重新上传。',
-      'CSV 编码：CSV 文件支持自动检测 UTF-8 和 GBK 编码，如果仍有乱码请手动转换编码后重试。',
-      '脏数据处理：解析中无法识别的行自动存入脏数据表，不影响正常数据入库。可在"解析报告"中查看脏数据行数。',
-      '列数不匹配：如果数据行列数与表头差异过大（多于 3 列或少于一半），该行会被标记为脏数据。'
+      '检查文件格式和编码（TXT 默认 GBK，CSV 自动检测）。',
+      '查看”系统设置 → 运行日志”获取后端错误详情。',
+      '保留浏览器控制台错误信息并联系管理员。'
     ],
-    note: '单个文件上传上限为 50MB。如果需要处理更大的文件，建议拆分为多个小文件后分批上传。',
-    content: '',
-    links: [{ label: '去数据源管理', path: '/datasource' }]
-  },
-  {
-    id: 'local-9',
-    title: '导出失败与性能问题',
-    icon: 'DocumentCopy',
-    category: 'faq',
-    summary: '导出失败、加载慢等问题的常见排查方法。',
-    steps: [
-      'Excel 导出失败：检查数据量是否接近 104 万行上限。如超出请缩小筛选范围后重试，或改用 ZIP 格式。',
-      '导出超时：大数据量导出可能需要较长时间，请耐心等待浏览器下载完成，不要关闭页面。',
-      '大文件上传慢：50 万行以上的文件解析需要 1~3 分钟，解析期间状态为"解析中"，完成后自动变为"成功"。',
-      '看板加载慢：系统采用分页加载，默认每页 100 条，可在页面底部切换每页数量。',
-      '可视化页面卡顿：系统对大数据量文件自动降采样至 5000 点以保证渲染速度，图表视觉几乎不受影响。'
-    ],
-    note: '如果多次尝试仍然失败，请保留浏览器控制台的错误信息并联系管理员排查。',
-    content: '',
-    links: [{ label: '去异常测段提取', path: '/extract' }]
-  },
-  {
-    id: 'local-10',
-    title: '系统设置与账号管理',
-    icon: 'Lock',
-    category: 'faq',
-    summary: '系统设置页面提供个人信息维护、密码管理、操作日志、运行日志和数据用量查看功能。',
-    steps: [
-      '个人信息：可以修改真实姓名、绑定邮箱、个人简介和头像（支持外链图片 URL）。',
-      '修改密码：建议定期更换密码。修改成功后系统自动退出，需要使用新密码重新登录。',
-      '存储用量：点击"查看用量"可查看当前账号已上传文件数、解析总行数、脏数据行数和操作日志条数。',
-      '操作日志：记录所有文件上传、解析、导出、删除等操作历史，支持分页查看和按模块分类筛选。',
-      '运行日志：实时查看后端服务的运行状态和错误信息，支持按级别（INFO/WARN/ERROR）筛选，每 3 秒自动刷新。',
-      '清除缓存：一键清理已删除文件的残留数据、脏数据、过期操作日志和过期令牌。'
-    ],
-    note: '每个用户只能查看和操作自己上传的文件，不同用户之间的数据完全隔离。运行日志保存在内存中，重启后清空。',
-    content: '',
     links: [{ label: '去系统设置', path: '/settings' }]
   }
 ]
@@ -449,18 +278,13 @@ const fetchInstructions = async () => {
   try {
     const data = await getInstructionList()
     if (Array.isArray(data) && data.length > 0) {
-      // 合并 API 数据与 fallback 数据：API 没有的条目自动补充
-      const apiTitles = new Set(data.map(d => (d.title || '').trim()))
-      const missingFallback = fallbackData.filter(fb => {
-        return !Array.from(apiTitles).some(t => t.includes(fb.title) || fb.title.includes(t))
-      })
-      instructionsList.value = [...data, ...missingFallback]
+      instructionsList.value = data
     } else {
-      instructionsList.value = fallbackData
+      instructionsList.value = SKELETON_DATA
     }
   } catch (error) {
-    instructionsList.value = fallbackData
-    ElMessage.warning('说明数据加载失败，已展示本地示例内容')
+    instructionsList.value = SKELETON_DATA
+    ElMessage.warning('说明数据加载失败，已展示基础引导内容')
   } finally {
     loading.value = false
   }
@@ -469,10 +293,6 @@ const fetchInstructions = async () => {
 function normalizeInstruction(item, index) {
   const plainText = htmlToText(item.content || item.summary || '')
   const title = (item.title || `说明 ${index + 1}`).trim()
-  if (isLegacyAiExtractionInstruction(title, plainText)) {
-    return buildVisualizationInstruction(item, index)
-  }
-
   const steps = normalizeSteps(item.steps, plainText, title)
   const summary = (item.summary || buildSummary(plainText, title)).trim()
   const note = (item.note || extractNote(plainText)).trim()
@@ -490,37 +310,6 @@ function normalizeInstruction(item, index) {
     links,
     anchorId: `instruction-${item.id ?? index}`,
     searchText: `${title} ${summary} ${steps.join(' ')} ${note} ${plainText}`.toLowerCase()
-  }
-}
-
-function isLegacyAiExtractionInstruction(title, plainText) {
-  const source = `${title} ${plainText}`
-  return /AI智能提取|AI 智能提取|通义千问|自然语言筛选/.test(source)
-}
-
-function buildVisualizationInstruction(item, index) {
-  const title = '提示 2：异常测段可视化'
-  const summary = '在异常测段可视化页面选择测井文件、显示通道、统计通道和异常识别条件，生成多道曲线与异常测段高亮结果。'
-  const steps = [
-    '进入“异常测段可视化”页面并选择目标测井文件。',
-    '选择需要展示的曲线通道，以及参与极值、均值统计的特征通道。',
-    '配置异常识别条件和最短连续测点数，点击执行分析与渲染。',
-    '在图表中核对异常段高亮区域，必要时查看明细或导出 CSV 结果。'
-  ]
-  const note = '异常测段可视化只用于分析展示与结果导出，不会修改原始解析数据。'
-  const links = [{ label: '去异常测段可视化', path: '/visualization' }]
-
-  return {
-    id: item.id ?? `local-${index + 1}`,
-    icon: item.icon || 'Lightbulb',
-    title,
-    summary,
-    steps,
-    note,
-    category: normalizeCategory(item.category, title, summary),
-    links,
-    anchorId: `instruction-${item.id ?? index}`,
-    searchText: `${title} ${summary} ${steps.join(' ')} ${note}`.toLowerCase()
   }
 }
 
@@ -643,8 +432,8 @@ function normalizeLinks(links, category, sourceText) {
   if (/上传|数据源/.test(sourceText)) {
     candidateLinks.push({ label: '去数据源管理', path: '/datasource' })
   }
-  if (/导出|看板|测井|报表/.test(sourceText)) {
-    candidateLinks.push({ label: '去测井数据看板', path: '/files' })
+  if (/导出|看板|测井|报表|筛选/.test(sourceText)) {
+    candidateLinks.push({ label: '去异常测段提取', path: '/extract' })
   }
   if (/异常.*可视化|可视化.*异常|图表|渲染/.test(sourceText)) {
     candidateLinks.push({ label: '去异常测段可视化', path: '/visualization' })

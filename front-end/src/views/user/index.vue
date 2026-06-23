@@ -84,6 +84,9 @@
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { addUser, deleteUser, getUserPage, updateUser } from '@/api/user'
+import { useUserStore } from '@/store/user'
+
+const userStore = useUserStore()
 
 const loading = ref(false)
 const tableData = ref([])
@@ -109,17 +112,19 @@ const form = reactive({
 
 const rules = reactive({
   username: [{ required: true, message: '请输入账号', trigger: 'blur' }],
-  realName: [{ required: true, message: '请输入姓名', trigger: 'blur' }]
+  realName: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
+  email: [{ type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' }]
 })
 
 const fetchData = async () => {
   loading.value = true
   try {
     const res = await getUserPage(pageParam)
-    tableData.value = res.records || []
-    total.value = res.total || 0
+    tableData.value = res?.records || []
+    total.value = res?.total || 0
   } catch (error) {
     console.error(error)
+    ElMessage.error('获取用户列表失败')
   } finally {
     loading.value = false
   }
@@ -144,34 +149,46 @@ const handleAdd = () => {
 const handleEdit = (row) => {
   resetForm()
   dialogType.value = 'edit'
-  Object.assign(form, row)
+  form.id = row.id
+  form.username = row.username
+  form.realName = row.realName
+  form.email = row.email || ''
+  form.role = row.role
+  form.introduction = row.introduction || ''
   dialogVisible.value = true
 }
 
 const submitForm = async () => {
   if (!formRef.value) return
-  await formRef.value.validate(async (valid) => {
-    if (!valid) return
-    submitLoading.value = true
-    try {
-      if (dialogType.value === 'add') {
-        await addUser(form)
-        ElMessage.success('新增成功，初始默认密码为 123456')
-      } else {
-        await updateUser(form)
-        ElMessage.success('信息更新成功')
-      }
-      dialogVisible.value = false
-      fetchData()
-    } catch (error) {
-      console.error(error)
-    } finally {
-      submitLoading.value = false
+  try {
+    await formRef.value.validate()
+  } catch {
+    return // 校验未通过
+  }
+  submitLoading.value = true
+  try {
+    if (dialogType.value === 'add') {
+      await addUser(form)
+      ElMessage.success('新增成功，初始默认密码为 123456')
+    } else {
+      await updateUser(form)
+      ElMessage.success('信息更新成功')
     }
-  })
+    dialogVisible.value = false
+    fetchData()
+  } catch (error) {
+    console.error(error)
+    ElMessage.error(dialogType.value === 'add' ? '新增用户失败' : '更新用户失败')
+  } finally {
+    submitLoading.value = false
+  }
 }
 
 const handleDelete = (row) => {
+  if (row.id === userStore.userInfo.id) {
+    ElMessage.warning('不能删除自己的账号')
+    return
+  }
   ElMessageBox.confirm(`确定要永久删除用户 "${row.username}" 吗？`, '警告', {
     confirmButtonText: '确定删除',
     cancelButtonText: '取消',
@@ -183,6 +200,7 @@ const handleDelete = (row) => {
       fetchData()
     } catch (error) {
       console.error(error)
+      ElMessage.error('删除用户失败')
     }
   }).catch(() => {})
 }

@@ -114,8 +114,8 @@
                   </div>
                 </div>
                 <div class="file-actions" v-if="file.status === 1">
-                  <el-button link type="primary" size="small" @click="$router.push('/files')">看板</el-button>
-                  <el-button link type="primary" size="small" @click="$router.push('/visualization')">可视化</el-button>
+                  <el-button link type="primary" size="small" @click="$router.push({ path: '/extract', query: { fileId: file.id } })">筛选</el-button>
+                  <el-button link type="primary" size="small" @click="$router.push({ path: '/visualization', query: { fileId: file.id } })">可视化</el-button>
                 </div>
               </div>
             </div>
@@ -140,9 +140,9 @@
                 <strong>数据源管理</strong>
                 <span>上传与扫描文件</span>
               </div>
-              <div class="shortcut-item" @click="$router.push('/files')">
-                <strong>测井数据看板</strong>
-                <span>浏览与筛选数据</span>
+              <div class="shortcut-item" @click="$router.push('/settings')">
+                <strong>系统设置</strong>
+                <span>账号与运行日志</span>
               </div>
               <div class="shortcut-item" @click="$router.push('/extract')">
                 <strong>异常测段提取</strong>
@@ -213,7 +213,7 @@ const statsData = ref({
 // 文件排序：解析中/失败排前面，成功排后面
 const sortedFiles = computed(() => {
   return [...recentFiles.value].sort((a, b) => {
-    const priority = { 0: 0, '-1': 1 } // 0=解析中最前, -1=失败次之
+    const priority = { 0: 0, [-1]: 1 } // 0=解析中最前, -1=失败次之
     const pa = priority[a.status] ?? 2
     const pb = priority[b.status] ?? 2
     if (pa !== pb) return pa - pb
@@ -232,9 +232,12 @@ const pendingHint = computed(() => {
 
 const formatRelativeTime = (timeStr) => {
   if (!timeStr) return ''
+  if (typeof timeStr === 'number') timeStr = new Date(timeStr).toISOString()
   const now = new Date()
   const time = new Date(timeStr)
+  if (isNaN(time.getTime())) return ''
   const diffMs = now - time
+  if (diffMs < 0) return ''
   const diffMin = Math.floor(diffMs / 60000)
   if (diffMin < 1) return '刚刚'
   if (diffMin < 60) return `${diffMin} 分钟前`
@@ -242,7 +245,8 @@ const formatRelativeTime = (timeStr) => {
   if (diffHour < 24) return `${diffHour} 小时前`
   const diffDay = Math.floor(diffHour / 24)
   if (diffDay < 30) return `${diffDay} 天前`
-  return timeStr.slice(0, 10)
+  if (typeof timeStr === 'string') return timeStr.slice(0, 10)
+  return ''
 }
 
 const fetchStats = async () => {
@@ -256,16 +260,19 @@ const fetchStats = async () => {
         totalExports: resData.stats.totalExports || 0,
         systemStatus: resData.stats.systemStatus || '未知状态'
       }
-      recentLogs.value = resData.recentLogs || []
     }
+    recentLogs.value = resData?.recentLogs || []
   } catch (error) {
     console.error('获取仪表盘统计数据失败', error)
+    statsData.value.systemStatus = '加载失败'
+    ElMessage.error('统计数据加载失败')
   } finally {
     loading.value = false
   }
 }
 
 const getLogColor = (module) => {
+  if (!module || typeof module !== 'string') return '#10b981'
   if (module.includes('异常') || module.includes('失败')) return '#ef4444'
   if (module.includes('上传') || module.includes('加载') || module.includes('扫描')) return '#3b82f6'
   if (module.includes('导出')) return '#f59e0b'
@@ -274,18 +281,22 @@ const getLogColor = (module) => {
 
 const statusColorClass = computed(() => {
   const status = statsData.value.systemStatus
-  if (status === '正常运行') return 'status-green'
+  if (status === '正常运行' || status === '正在加载...' || status === '加载失败') return 'status-green'
   if (status === '磁盘告警') return 'status-orange'
-  return 'status-red'
+  return 'status-green'
 })
 
 onMounted(() => {
   fetchStats()
   fetchFiles()
+  lastFetchTime.value = Date.now()
 })
 
-// 从其他页面切回时自动刷新（keep-alive 触发）
+// 从其他页面切回时自动刷新（keep-alive 触发），30 秒内不重复请求
+let lastFetchTime = ref(0)
 onActivated(() => {
+  if (Date.now() - lastFetchTime.value < 30000) return
+  lastFetchTime.value = Date.now()
   fetchStats()
   fetchFiles()
 })
@@ -294,11 +305,16 @@ const fetchFiles = async () => {
   try {
     filesLoading.value = true
     const data = await getRecentFiles()
+    let list = []
     if (Array.isArray(data)) {
-      recentFiles.value = data
+      list = data
+    } else if (data?.records) {
+      list = data.records
     }
+    recentFiles.value = list.map(f => ({ ...f, status: Number(f.status) ?? 0 }))
   } catch (error) {
     console.error('获取最近文件失败', error)
+    ElMessage.error('文件列表加载失败')
   } finally {
     filesLoading.value = false
   }

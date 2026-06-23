@@ -23,8 +23,11 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.*;
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -52,6 +55,12 @@ public class LogDataController {
 
     @Autowired
     private WellLayerService wellLayerService;
+
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
+    private LogDataRecordService logDataRecordService;
 
     /** 每批导出行数（受限于 MybatisPlus 分页上限 10000） */
     private static final int EXPORT_BATCH_SIZE = 10000;
@@ -87,8 +96,19 @@ public class LogDataController {
                 String col = entry.getKey();
                 String colLower = col.toLowerCase();
                 LogDataQueryDTO.FilterRange range = entry.getValue();
-                if (range == null || (range.getMin() == null && range.getMax() == null)) continue;
+                if (range == null) continue;
 
+                // 文本列筛选：values 不为空时走 IN 条件
+                if (range.getValues() != null && !range.getValues().isEmpty()) {
+                    String textCol = getTextDbColumn(query.getFileId(), col);
+                    if (textCol != null) {
+                        wrapper.in(textCol, range.getValues());
+                    }
+                    continue;
+                }
+
+                // 定量列筛选：min/max 范围
+                if (range.getMin() == null && range.getMax() == null) continue;
                 String dbCol = getMappedDbColumn(colLower);
                 if (dbCol.equals("unmapped")) {
                     if (range.getMin() != null) wrapper.apply("JSON_EXTRACT(extra_json, '$." + col + "') >= {0}", range.getMin());
@@ -153,6 +173,210 @@ public class LogDataController {
             case "rt" -> "rt";
             default -> "unmapped";
         };
+    }
+
+    /**
+     * 校验 text_col 列名是否为合法的 text_col_1 ~ text_col_10，防止 SQL 注入
+     */
+    private static final java.util.regex.Pattern TEXT_COL_PATTERN =
+            java.util.regex.Pattern.compile("^text_col_([1-9]|10)$");
+
+    private boolean isValidTextCol(String columnName) {
+        return columnName != null && TEXT_COL_PATTERN.matcher(columnName).matches();
+    }
+
+    /**
+     * 根据文件的 text_columns_json 配置，获取原始列名对应的 text_col_N 数据库字段。
+     * 返回结果经过白名单校验，不合法的列名返回 null。
+     */
+    private String getTextDbColumn(Long fileId, String originalColName) {
+        LogFileInfo fileInfo = fileInfoService.getById(fileId);
+        if (fileInfo == null || fileInfo.getTextColumnsJson() == null) return null;
+        Map<String, String> mapping = JSONUtil.toBean(fileInfo.getTextColumnsJson(), Map.class);
+        // 尝试多种大小写匹配
+        String mapped = mapping.get(originalColName);
+        if (mapped == null) mapped = mapping.get(originalColName.toLowerCase());
+        if (mapped == null) mapped = mapping.get(originalColName.toUpperCase());
+        // 白名单校验：只允许 text_col_1 ~ text_col_10
+        if (mapped != null && !isValidTextCol(mapped)) {
+            log.warn("[安全] 拦截非法 text_col 列名: {} -> {}", originalColName, mapped);
+            return null;
+        }
+        return mapped;
+    }
+
+    /**
+     * 获取文本列的唯一值列表（用于前端多选下拉）
+     */
+    @GetMapping("/{fileId}/distinct-values")
+    public Result<List<String>> getDistinctValues(@PathVariable Long fileId,
+                                                   @RequestParam String column) {
+        LogFileInfo fileInfo = fileInfoService.getById(fileId);
+        if (fileInfo == null) return Result.failed("文件不存在");
+
+        String dbColumn = getTextDbColumn(fileId, column);
+        if (dbColumn == null) {
+            return Result.failed("列 [" + column + "] 未配置为文本列");
+        }
+
+        // 用 JdbcTemplate 显式查询（text_col_N 标记了 select=false，MyBatis-Plus 不会自动选）
+        String sql = "SELECT DISTINCT " + dbColumn + " FROM log_data_records WHERE file_id = ? AND " + dbColumn + " IS NOT NULL AND " + dbColumn + " != '' ORDER BY " + dbColumn + " LIMIT 200";
+        List<String> values = jdbcTemplate.queryForList(sql, String.class, fileId);
+        return Result.success(values);
+    }
+
+    /**
+     * 保存文件的文本列配置，并从 extra_json 回填数据到 text_col_N 字段
+     */
+    /**
+     * 扫描候选文本列（前500行分析）
+     */
+    @GetMapping("/{fileId}/text-columns/candidates")
+    public Result<List<Map<String, Object>>> scanTextColumnCandidates(@PathVariable Long fileId) {
+        LogFileInfo fileInfo = fileInfoService.getById(fileId);
+        if (fileInfo == null) return Result.failed("文件不存在");
+
+        String columnsJson = fileInfo.getColumnsJson();
+        if (columnsJson == null || columnsJson.isEmpty()) {
+            return Result.success(Collections.emptyList());
+        }
+
+        List<String> columns = JSONUtil.toList(columnsJson, String.class);
+        if (columns == null || columns.isEmpty()) return Result.success(Collections.emptyList());
+
+        // 随机采样前500行
+        List<LogDataRecord> sample = logDataRecordService.lambdaQuery()
+                .eq(LogDataRecord::getFileId, fileId)
+                .last("LIMIT 500")
+                .list();
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (String col : columns) {
+            int total = 0, nonNumeric = 0;
+            Set<String> uniqueValues = new LinkedHashSet<>();
+            List<String> samples = new ArrayList<>();
+
+            for (LogDataRecord row : sample) {
+                String val = readColumnValue(row, col);
+                if (val == null || val.isEmpty()) continue;
+                total++;
+                if (!isNumeric(val)) nonNumeric++;
+                if (uniqueValues.size() < 500) uniqueValues.add(val);
+                if (samples.size() < 3) samples.add(val);
+            }
+
+            if (total == 0) continue;
+
+            double nonNumericRate = Math.round(nonNumeric * 10000.0 / total) / 100.0;
+            int uniqueCount = uniqueValues.size();
+            String reason = null;
+            boolean suggested = false;
+
+            // 判定规则
+            boolean nameHint = col.matches(".*(岩性|地层|层位|解释|结论|lith|formation|layer|text|desc|facies).*");
+            if (nameHint && nonNumericRate > 50) {
+                reason = "列名+数据类型";
+                suggested = true;
+            } else if (nonNumericRate > 70 && uniqueCount >= 2 && uniqueCount <= 200) {
+                reason = "自动检测";
+                suggested = true;
+            } else if (nonNumericRate > 70) {
+                reason = "自动检测";
+                suggested = false; // 值太多，不建议默认勾选
+            }
+
+            Map<String, Object> info = new LinkedHashMap<>();
+            info.put("name", col);
+            info.put("nonNumericRate", nonNumericRate);
+            info.put("uniqueCount", uniqueCount);
+            info.put("samples", samples);
+            info.put("suggested", suggested);
+            info.put("reason", reason);
+            result.add(info);
+        }
+        return Result.success(result);
+    }
+
+    @PostMapping("/{fileId}/text-columns")
+    public Result<String> saveTextColumns(@PathVariable Long fileId,
+                                           @RequestBody Map<String, Object> body) {
+        LogFileInfo fileInfo = fileInfoService.getById(fileId);
+        if (fileInfo == null) return Result.failed("文件不存在");
+
+        // 支持两种格式: {columns: ["岩性","解释结论"]} 或 {原始列名: text_col_N}
+        Map<String, String> mapping = new LinkedHashMap<>();
+        Object columnsObj = body.get("columns");
+        if (columnsObj instanceof List) {
+            @SuppressWarnings("unchecked")
+            List<String> colList = (List<String>) columnsObj;
+            if (colList.size() > 10) return Result.failed("文本列最多支持 10 个");
+            for (int i = 0; i < colList.size(); i++) {
+                mapping.put(colList.get(i), "text_col_" + (i + 1));
+            }
+        } else {
+            // 兼容旧格式
+            for (Map.Entry<String, Object> entry : body.entrySet()) {
+                Object v = entry.getValue();
+                if (v instanceof String && isValidTextCol((String) v)) {
+                    mapping.put(entry.getKey(), (String) v);
+                }
+            }
+            if (mapping.size() > 10) return Result.failed("文本列最多支持 10 个");
+        }
+
+        // 白名单校验
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+            if (!isValidTextCol(entry.getValue())) {
+                return Result.failed("列名不合法：" + entry.getValue());
+            }
+        }
+
+        fileInfo.setTextColumnsJson(JSONUtil.toJsonStr(mapping));
+        fileInfoService.updateById(fileInfo);
+
+        // 批量回填：每50000行一批
+        boolean backfillSuccess = true;
+        for (Map.Entry<String, String> entry : mapping.entrySet()) {
+            String originalCol = entry.getKey();
+            String textCol = entry.getValue();
+            try {
+                String jsonPath = "$." + originalCol;
+                String sql = "UPDATE log_data_records SET " + textCol +
+                        " = JSON_UNQUOTE(JSON_EXTRACT(extra_json, ?))" +
+                        " WHERE file_id = ?" +
+                        " AND JSON_EXTRACT(extra_json, ?) IS NOT NULL" +
+                        " AND JSON_UNQUOTE(JSON_EXTRACT(extra_json, ?)) != ''" +
+                        " LIMIT 50000";
+                int batchUpdated;
+                int totalUpdated = 0;
+                do {
+                    batchUpdated = jdbcTemplate.update(sql, jsonPath, fileId, jsonPath, jsonPath);
+                    totalUpdated += batchUpdated;
+                } while (batchUpdated >= 50000);
+                log.info("[筛选] 回填 {} -> {}: fileId={}, 更新 {} 行", originalCol, textCol, fileId, totalUpdated);
+            } catch (Exception e) {
+                log.warn("[筛选] 回填失败 {} -> {}: {}", originalCol, textCol, e.getMessage());
+                backfillSuccess = false;
+            }
+        }
+        return Result.success(backfillSuccess
+                ? "文本列配置已保存，数据回填完成"
+                : "文本列配置已保存，但部分回填失败");
+    }
+
+    /**
+     * 获取文件的文本列配置
+     */
+    @GetMapping("/{fileId}/text-columns")
+    public Result<Map<String, String>> getTextColumns(@PathVariable Long fileId) {
+        LogFileInfo fileInfo = fileInfoService.getById(fileId);
+        if (fileInfo == null) return Result.failed("文件不存在");
+
+        if (fileInfo.getTextColumnsJson() == null || fileInfo.getTextColumnsJson().isEmpty()) {
+            return Result.success(new LinkedHashMap<>());
+        }
+        Map<String, String> mapping = JSONUtil.toBean(fileInfo.getTextColumnsJson(), Map.class);
+        return Result.success(mapping);
     }
 
     @PostMapping("/export-batch-zip")
@@ -262,7 +486,19 @@ public class LogDataController {
                 String col = entry.getKey();
                 String colLower = col.toLowerCase();
                 LogDataQueryDTO.FilterRange range = entry.getValue();
-                if (range == null || (range.getMin() == null && range.getMax() == null)) continue;
+                if (range == null) continue;
+
+                // 文本列筛选：values 不为空时走 IN 条件
+                if (range.getValues() != null && !range.getValues().isEmpty()) {
+                    String textCol = getTextDbColumn(query.getFileId(), col);
+                    if (textCol != null) {
+                        wrapper.in(textCol, range.getValues());
+                    }
+                    continue;
+                }
+
+                // 定量列筛选
+                if (range.getMin() == null && range.getMax() == null) continue;
                 String dbCol = getMappedDbColumn(colLower);
                 if (dbCol.equals("unmapped")) {
                     if (range.getMin() != null)
@@ -306,6 +542,13 @@ public class LogDataController {
                         .orderByAsc(WellLayer::getTopDepth));
         boolean hasLayers = layers != null && !layers.isEmpty();
 
+        // 加载文本列映射
+        Map<String, String> textColMapping = null;
+        LogFileInfo fileInfoForText = fileInfoService.getById(fileId);
+        if (fileInfoForText != null && fileInfoForText.getTextColumnsJson() != null) {
+            textColMapping = JSONUtil.toBean(fileInfoForText.getTextColumnsJson(), Map.class);
+        }
+
         long totalWritten = 0;
         int currentPage = 1;
 
@@ -323,7 +566,7 @@ public class LogDataController {
             for (LogDataRecord record : records) {
                 List<Object> row = new ArrayList<>(cols.size() + (hasLayers ? 1 : 0));
                 for (String colName : cols) {
-                    row.add(readRecordValue(record, colName));
+                    row.add(readRecordValue(record, colName, textColMapping));
                 }
                 // 如果有分层配置，根据 depth 匹配层名
                 if (hasLayers) {
@@ -362,6 +605,10 @@ public class LogDataController {
      * 根据列名将 LogDataRecord 中的值读取出来，统一转换为 Object
      */
     private Object readRecordValue(LogDataRecord record, String colName) {
+        return readRecordValue(record, colName, null);
+    }
+
+    private Object readRecordValue(LogDataRecord record, String colName, Map<String, String> textColMapping) {
         if (colName == null) return "";
         String colLower = colName.trim().toLowerCase();
         if (colLower.equals("depth") || colLower.contains("tvd") || colLower.contains("dep")) {
@@ -375,6 +622,30 @@ public class LogDataController {
             case "rt":  return record.getRt()  != null ? record.getRt()  : "";
             default: break;
         }
+
+        // 检查是否为文本列（从 text_col_N 读取）
+        if (textColMapping != null) {
+            String textCol = textColMapping.get(colName);
+            if (textCol == null) textCol = textColMapping.get(colName.toUpperCase());
+            if (textCol == null) textCol = textColMapping.get(colLower);
+            if (textCol != null) {
+                String val = switch (textCol) {
+                    case "text_col_1" -> record.getTextCol1();
+                    case "text_col_2" -> record.getTextCol2();
+                    case "text_col_3" -> record.getTextCol3();
+                    case "text_col_4" -> record.getTextCol4();
+                    case "text_col_5" -> record.getTextCol5();
+                    case "text_col_6" -> record.getTextCol6();
+                    case "text_col_7" -> record.getTextCol7();
+                    case "text_col_8" -> record.getTextCol8();
+                    case "text_col_9" -> record.getTextCol9();
+                    case "text_col_10" -> record.getTextCol10();
+                    default -> null;
+                };
+                if (val != null) return val;
+            }
+        }
+
         Map<String, Object> extra = record.getExtraJson();
         if (extra != null) {
             Object val = extra.get(colName);
@@ -529,6 +800,36 @@ public class LogDataController {
             return Double.parseDouble(String.valueOf(value));
         } catch (Exception e) {
             return Double.NaN;
+        }
+    }
+
+    private String readColumnValue(LogDataRecord row, String col) {
+        // 先查物理列，再查 extraJson
+        switch (col) {
+            case "depth": case "DEPTH": return row.getDepth() != null ? row.getDepth().toString() : null;
+            case "ac": case "AC": return row.getAc() != null ? row.getAc().toString() : null;
+            case "den": case "DEN": return row.getDen() != null ? row.getDen().toString() : null;
+            case "gr": case "GR": return row.getGr() != null ? row.getGr().toString() : null;
+            case "rt": case "RT": return row.getRt() != null ? row.getRt().toString() : null;
+            case "sp": case "SP": return row.getSp() != null ? row.getSp().toString() : null;
+        }
+        // 查 extraJson
+        if (row.getExtraJson() instanceof Map) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> extra = (Map<String, Object>) row.getExtraJson();
+            Object v = extra.get(col);
+            return v != null ? String.valueOf(v) : null;
+        }
+        return null;
+    }
+
+    private boolean isNumeric(String str) {
+        if (str == null || str.isEmpty()) return false;
+        try {
+            Double.parseDouble(str);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
         }
     }
 }

@@ -1,6 +1,7 @@
 package com.xy.welllog.controller;
 
 import cn.hutool.core.io.FileUtil;
+import cn.hutool.json.JSONUtil;
 import com.alibaba.excel.EasyExcel;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.xy.welllog.common.Result;
@@ -152,12 +153,17 @@ public class FileController {
             fileInfo.setTotalRows(0);
             fileInfo.setStatus(0); // 解析中
             fileInfo.setCreateTime(new Date());
+            // 上传时指定了文本列，直接保存映射关系
+            if (confirmDto.getTextColumns() != null && !confirmDto.getTextColumns().isEmpty()) {
+                fileInfo.setTextColumnsJson(JSONUtil.toJsonStr(confirmDto.getTextColumns()));
+            }
             fileInfoService.save(fileInfo);
             
             Long fileId = fileInfo.getId();
 
-            // 投递到线程池，执行最终解析
-            logFileParseService.asyncParseAndSaveTxtStream(file, confirmDto.getOriginalFileName(), fileId, confirmDto.getConfirmedMapping());
+            // 投递到线程池，执行最终解析（传入文本列映射，解析阶段直接写入 text_col_N）
+            logFileParseService.asyncParseAndSaveTxtStream(file, confirmDto.getOriginalFileName(),
+                    fileId, confirmDto.getConfirmedMapping(), confirmDto.getTextColumns());
 
             operationLogService.recordLog("确认上传", "正式解析测井档案 [" + confirmDto.getOriginalFileName() + "]", 1, 0L, getUserId(request));
             
@@ -203,7 +209,7 @@ public class FileController {
                 fileInfo.setCreateTime(new Date());
                 fileInfoService.save(fileInfo);
                 
-                logFileParseService.asyncParseAndSaveTxtStream(txtFile, txtFile.getName(), fileInfo.getId(), preview.getSuggestedMapping());
+                logFileParseService.asyncParseAndSaveTxtStream(txtFile, txtFile.getName(), fileInfo.getId(), preview.getSuggestedMapping(), null);
                 submittedCount++;
             } catch (Exception e) {
                 log.warn("跳过不合规的文件: {}", txtFile.getName(), e);
@@ -786,11 +792,9 @@ public class FileController {
                         // 前端指定了井名
                         filterWellName = selectedWellName;
                     } else {
-                        // 尝试自动匹配：文件名包含井名 或 井名包含文件名
+                        // 精确匹配：井名完全等于文件名（忽略大小写）才自动选中
                         for (String wn : wellNames) {
-                            if (fileNameNoExt.contains(wn) || wn.contains(fileNameNoExt)
-                                    || fileNameNoExt.toLowerCase().contains(wn.toLowerCase())
-                                    || wn.toLowerCase().contains(fileNameNoExt.toLowerCase())) {
+                            if (wn.equalsIgnoreCase(fileNameNoExt)) {
                                 filterWellName = wn;
                                 break;
                             }

@@ -41,7 +41,7 @@
       <div class="table-card">
         <el-table v-loading="loading" :data="tableData" stripe border>
           <el-table-column prop="id" label="文件 ID" width="100" />
-          <el-table-column prop="fileName" label="文件名称" show-overflow-tooltip />
+          <el-table-column prop="fileName" label="文件名称" min-width="140" show-overflow-tooltip />
           <el-table-column prop="totalRows" label="数据量(行)" width="120" align="center" />
           <el-table-column label="解析列名预览" show-overflow-tooltip>
             <template #default="{ row }">
@@ -60,11 +60,12 @@
               <el-tag v-else type="info">未知</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="300" fixed="right" align="center">
+          <el-table-column label="操作" width="380" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="success" link icon="DocumentChecked" :disabled="row.status !== 1" @click="handleParseReport(row)">解析报告</el-button>
+              <el-button size="small" type="success" link icon="DocumentChecked" :disabled="row.status !== 1" @click="handleParseReport(row)">报告</el-button>
               <el-button size="small" type="primary" link icon="View" :disabled="row.status !== 1" @click="handlePreview(row)">预览</el-button>
               <el-button size="small" type="warning" link icon="Menu" :disabled="row.status !== 1" @click="openLayerDialog(row)">分层</el-button>
+              <el-button size="small" type="info" link icon="Edit" :disabled="row.status !== 1" @click="openTextColumnDialog(row)">文本列</el-button>
               <el-button size="small" type="danger" link icon="Delete" :disabled="row.status === 0" @click="handleDelete(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -193,15 +194,8 @@
                 :value="mapCol.standardName"
               />
               <template #footer>
-                <el-button 
-                  text 
-                  type="primary" 
-                  icon="Plus" 
-                  class="full-width" 
-                  @click="openAddDictDialog(index, header)"
-                >
-                  添加新的标准字段
-                </el-button>
+                <el-button text type="primary" icon="Plus" class="full-width"
+                  @click="openAddDictDialog(index, header)">添加新的标准字段</el-button>
               </template>
             </el-select>
           </template>
@@ -235,6 +229,35 @@
           <el-button @click="addDictDialogVisible = false">取消</el-button>
           <el-button type="primary" :loading="addDictLoading" @click="submitAddDict">保存并应用</el-button>
         </span>
+      </template>
+    </el-dialog>
+
+    <!-- 文本列配置 -->
+    <el-dialog v-model="textColDialogVisible" title="文本列配置" width="660px" top="8vh" class="textcol-dialog" @open="fetchTextColumnCandidates">
+      <div class="textcol-subtitle">系统扫描了前 500 行，自动推荐以下文本类型列（多选筛选）：</div>
+      <div v-loading="textColScanning" class="textcol-list">
+        <div v-if="textColCandidates.length === 0 && !textColScanning" class="textcol-empty">
+          暂未检测到候选文本列（所有列均为数值类型）
+        </div>
+        <el-checkbox-group v-model="textColSelected" class="textcol-grid">
+          <div v-for="col in textColCandidates" :key="col.name" class="textcol-item"
+            :class="{ 'textcol-item--warn': col.reason === '自动检测' && col.uniqueCount > 200 }">
+            <el-checkbox :label="col.name" :value="col.name">
+              <span class="textcol-name">{{ col.name }}</span>
+            </el-checkbox>
+            <div class="textcol-meta">
+              <span>非数值 {{ col.nonNumericRate }}%</span>
+              <span>{{ col.uniqueCount }} 种值</span>
+              <el-tag v-if="col.reason" size="small" type="info" effect="plain" class="textcol-reason">{{ col.reason }}</el-tag>
+            </div>
+            <div class="textcol-samples">{{ col.samples?.join(' / ') || '-' }}</div>
+          </div>
+        </el-checkbox-group>
+      </div>
+      <div class="textcol-footer-info">已选 {{ textColSelected.length }} / 10 列</div>
+      <template #footer>
+        <el-button @click="textColDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="textColSaving" @click="saveTextColumnConfig">保存配置并回填数据</el-button>
       </template>
     </el-dialog>
 
@@ -367,6 +390,7 @@ const pageParams = reactive({
 })
 
 let pollingTimer = null
+let pollingAbortController = null
 
 const scanDialogVisible = ref(false)
 const scanPath = ref('')
@@ -374,6 +398,51 @@ const scanning = ref(false)
 
 const sandboxVisible = ref(false)
 const sandboxLoading = ref(false)
+
+// ========== 文本列配置 ==========
+const textColDialogVisible = ref(false)
+const textColScanning = ref(false)
+const textColSaving = ref(false)
+const textColCandidates = ref([])
+const textColSelected = ref([])
+const textColCurrentFileId = ref(null)
+
+const openTextColumnDialog = async (row) => {
+  textColCurrentFileId.value = row.id
+  textColSelected.value = []
+  textColDialogVisible.value = true
+}
+
+const fetchTextColumnCandidates = async () => {
+  if (!textColCurrentFileId.value) return
+  textColScanning.value = true
+  try {
+    const res = await request.get(`/data/${textColCurrentFileId.value}/text-columns/candidates`)
+    textColCandidates.value = res || []
+    // 自动勾选推荐的
+    textColSelected.value = (res || []).filter(c => c.suggested).map(c => c.name).slice(0, 10)
+  } catch {
+    textColCandidates.value = []
+    ElMessage.error('扫描候选列失败')
+  } finally {
+    textColScanning.value = false
+  }
+}
+
+const saveTextColumnConfig = async () => {
+  textColSaving.value = true
+  try {
+    await request.post(`/data/${textColCurrentFileId.value}/text-columns`, {
+      columns: textColSelected.value
+    })
+    ElMessage.success('文本列配置已保存，数据回填中...')
+    textColDialogVisible.value = false
+  } catch (error) {
+    ElMessage.error(error?.message || '保存失败')
+  } finally {
+    textColSaving.value = false
+  }
+}
 const allMappingOptions = ref([])
 const previewSummary = ref({
   tempFilePath: '',
@@ -405,7 +474,7 @@ const addDictForm = reactive({
 const openAddDictDialog = (index, originalHeader) => {
   currentEditIndex.value = index
   addDictForm.originalHeader = originalHeader
-  addDictForm.standardName = originalHeader.replace(/[^a-zA-Z0-9_]/g, '')
+  addDictForm.standardName = originalHeader.replace(/[^a-zA-Z0-9_]/g, '') || `col_${index + 1}`
   addDictForm.chineseMeaning = ''
   addDictDialogVisible.value = true
 }
@@ -427,6 +496,9 @@ const submitAddDict = async () => {
     await fetchMappingOptions()
     
     if (currentEditIndex.value !== -1) {
+      if (!previewSummary.value.suggestedMapping) {
+        previewSummary.value.suggestedMapping = []
+      }
       previewSummary.value.suggestedMapping[currentEditIndex.value] = addDictForm.standardName
     }
     
@@ -453,12 +525,22 @@ const checkPolling = () => {
 
 const fetchTableDataSilently = async () => {
   try {
-    const res = await request.get('/file/page', { params: pageParams })
+    // 取消上一次未完成的轮询请求
+    if (pollingAbortController) {
+      pollingAbortController.abort()
+    }
+    pollingAbortController = new AbortController()
+    const res = await request.get('/file/page', {
+      params: pageParams,
+      signal: pollingAbortController.signal
+    })
     tableData.value = res.records || []
     total.value = res.total || 0
     checkPolling()
   } catch (error) {
-    console.error('轮询查询失败', error)
+    if (error?.name !== 'AbortError' && error?.code !== 'ERR_CANCELED') {
+      console.error('轮询查询失败', error)
+    }
   }
 }
 
@@ -669,6 +751,11 @@ const confirmWellSelect = async () => {
   wellSelectLoading.value = true
   try {
     const formData = new FormData()
+    if (!layerImportFile.value) {
+      ElMessage.error('文件丢失，请重新选择')
+      wellSelectLoading.value = false
+      return
+    }
     formData.append('file', layerImportFile.value)
     const res = await importLayersFromExcel(layerFile.value.id, formData, selectedWell.value)
     ElMessage.success(res || '导入成功')
@@ -695,14 +782,25 @@ const reloadLayerRows = async () => {
 }
 
 const customUpload = async (options) => {
+  const file = options.file
+  if (!file) {
+    ElMessage.error('未选择文件')
+    return
+  }
+  if (file.size === 0) {
+    ElMessage.error('文件为空，请重新选择')
+    return
+  }
+  if (file.size > 50 * 1024 * 1024) {
+    ElMessage.error('文件大小不能超过 50MB')
+    return
+  }
   const formData = new FormData()
-  formData.append('file', options.file)
+  formData.append('file', file)
   try {
     loading.value = true
-    const res = await request.post('/file/preview', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' }
-    })
-    res.originalSuggestedMapping = [...res.suggestedMapping]
+    const res = await request.post('/file/preview', formData)
+    res.originalSuggestedMapping = [...(res.suggestedMapping || [])]
     previewSummary.value = res
     sandboxVisible.value = true
   } catch (error) {
@@ -818,7 +916,7 @@ const handlePreview = async (row) => {
       current: 1,
       size: 100
     })
-    previewTableData.value = res.records || res.data?.records || res || []
+    previewTableData.value = res.records || []
   } catch (error) {
     ElMessage.error(error.message || '获取预览数据失败')
   } finally {
@@ -835,6 +933,10 @@ onUnmounted(() => {
   if (pollingTimer) {
     clearInterval(pollingTimer)
     pollingTimer = null
+  }
+  if (pollingAbortController) {
+    pollingAbortController.abort()
+    pollingAbortController = null
   }
 })
 </script>
@@ -1075,5 +1177,70 @@ onUnmounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
+}
+
+/* ===== 文本列配置弹窗 ===== */
+.textcol-subtitle {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 16px;
+  line-height: 1.6;
+}
+.textcol-list {
+  min-height: 80px;
+}
+.textcol-grid {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.textcol-empty {
+  text-align: center;
+  color: var(--el-text-color-placeholder);
+  padding: 30px 0;
+}
+.textcol-item {
+  padding: 10px 12px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+  border: 1px solid transparent;
+}
+.textcol-item--warn {
+  background: #fefce8;
+  border-color: #fde68a;
+}
+.textcol-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+}
+.textcol-meta {
+  margin-top: 4px;
+  margin-left: 24px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.textcol-samples {
+  margin-left: 24px;
+  font-size: 11px;
+  color: var(--el-text-color-placeholder);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.textcol-reason {
+  font-size: 11px;
+}
+.textcol-footer-info {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--el-color-primary);
+  font-weight: 500;
+  text-align: right;
 }
 </style>

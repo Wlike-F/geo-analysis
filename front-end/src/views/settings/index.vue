@@ -12,7 +12,7 @@
 
             <el-row :gutter="40" class="profile-row">
               <el-col :xs="24" :lg="14">
-                <el-form label-position="top" :model="userInfo" size="large">
+                <el-form ref="profileFormRef" label-position="top" :model="userInfo" :rules="profileRules" size="large">
                   <el-form-item label="系统账号">
                     <el-input v-model="userInfo.username" disabled />
                   </el-form-item>
@@ -39,6 +39,75 @@
                 </div>
               </el-col>
             </el-row>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="筛选偏好" name="filterPref" icon="Filter">
+          <div class="pane-content">
+            <div class="pane-header">
+              <h3 class="pane-title">筛选偏好设置</h3>
+              <p class="pane-subtitle">配置全局筛选默认列、管理常用条件预设模板。</p>
+            </div>
+            <el-divider />
+
+            <!-- 区块1：默认全局筛选列 -->
+            <div class="security-list" style="max-width: 720px;">
+              <div class="pref-section-title">默认全局筛选列</div>
+              <p class="pref-section-desc">进入"异常测段提取 → 所有文件"模式时，自动加载以下列作为筛选条件候选。从字段映射表中选择。</p>
+              <el-select
+                v-model="defaultFilterColumns"
+                multiple filterable collapse-tags collapse-tags-tooltip
+                placeholder="点击选择默认筛选列…"
+                style="width: 100%; margin-bottom: 12px;"
+                :loading="columnMappingLoading"
+              >
+                <el-option
+                  v-for="col in columnMappingOptions"
+                  :key="col.standardName"
+                  :label="col.chineseMeaning ? `${col.standardName}（${col.chineseMeaning}）` : col.standardName"
+                  :value="col.standardName"
+                />
+              </el-select>
+              <el-button type="primary" size="default" @click="handleSaveDefaultColumns" :loading="defaultColumnsSaving">保存默认列</el-button>
+            </div>
+
+            <el-divider border-style="dashed" />
+
+            <!-- 区块2：条件预设模板 -->
+            <div>
+              <div class="pref-section-title">条件预设模板</div>
+              <p class="pref-section-desc">保存常用的筛选条件组合，在异常测段提取页面一键加载。</p>
+
+              <div style="margin-bottom: 12px; display: flex; gap: 8px;">
+                <el-button type="primary" size="default" @click="openPresetDialog()">新建预设</el-button>
+                <el-button icon="Refresh" size="default" @click="loadPresets" :loading="presetLoading">刷新</el-button>
+              </div>
+
+              <el-table :data="presetList" v-loading="presetLoading" border style="width: 100%;" size="default">
+                <el-table-column type="index" label="序号" width="60" align="center" />
+                <el-table-column prop="name" label="预设名称" min-width="140" />
+                <el-table-column prop="scope" label="适用范围" width="100" align="center">
+                  <template #default="{ row }">
+                    <el-tag size="small" :type="row.scope === 'all' ? '' : 'warning'">{{ row.scope === 'all' ? '全局' : '当前文件' }}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="包含列" min-width="180">
+                  <template #default="{ row }">
+                    <template v-if="row.columnsJson">
+                      <el-tag v-for="col in parseJson(row.columnsJson, [])" :key="col" size="small" style="margin: 2px 4px 2px 0;">{{ col }}</el-tag>
+                    </template>
+                    <span v-else style="color: var(--el-text-color-placeholder);">—</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="updateTime" label="更新时间" width="170" align="center" />
+                <el-table-column label="操作" width="140" align="center">
+                  <template #default="{ row }">
+                    <el-button type="primary" link size="small" @click="openPresetDialog(row)">编辑</el-button>
+                    <el-button type="danger" link size="small" @click="handleDeletePreset(row)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
           </div>
         </el-tab-pane>
 
@@ -125,6 +194,7 @@
                 :total="opLogPage.total"
                 layout="total, prev, pager, next"
                 @current-change="fetchOpLogs"
+                @size-change="fetchOpLogs"
               />
             </div>
           </div>
@@ -155,7 +225,7 @@
                 v-for="(log, idx) in runtimeLogs"
                 :key="idx"
                 class="runtime-line"
-                :class="'level-' + log.level.toLowerCase()"
+                :class="'level-' + (log.level || '').toLowerCase()"
               >
                 <span class="runtime-time">{{ log.timestamp }}</span>
                 <span class="runtime-level">[{{ log.level }}]</span>
@@ -201,6 +271,7 @@
           :total="logPage.total"
           layout="total, prev, pager, next"
           @current-change="fetchLoginLogs"
+          @size-change="fetchLoginLogs"
         />
       </div>
       <template #footer>
@@ -231,6 +302,51 @@
         <el-button @click="storageDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 预设编辑弹窗 -->
+    <el-dialog v-model="presetDialogVisible" :title="presetForm.id ? '编辑预设' : '新建预设'" width="520px" destroy-on-close @close="resetPresetForm">
+      <el-form :model="presetForm" label-width="90px" size="default">
+        <el-form-item label="预设名称" required>
+          <el-input v-model="presetForm.name" placeholder="如：高GR异常" maxlength="50" show-word-limit />
+        </el-form-item>
+        <el-form-item label="适用范围">
+          <el-radio-group v-model="presetForm.scope">
+            <el-radio value="all">全局（所有文件）</el-radio>
+            <el-radio value="current">当前文件</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="包含列">
+          <el-select
+            v-model="presetColumnList"
+            multiple filterable collapse-tags collapse-tags-tooltip
+            placeholder="选择筛选列…"
+            style="width: 100%;"
+          >
+            <el-option
+              v-for="col in columnMappingOptions"
+              :key="col.standardName"
+              :label="col.chineseMeaning ? `${col.standardName}（${col.chineseMeaning}）` : col.standardName"
+              :value="col.standardName"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="数值条件">
+          <div style="width: 100%;">
+            <div v-for="col in presetColumnList" :key="col" style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+              <span style="width: 60px; flex-shrink: 0; font-size: 13px;">{{ col }}</span>
+              <el-input v-model="presetFilters[col].min" placeholder="最小值" clearable style="width: 120px;" />
+              <span style="color: #909399;">—</span>
+              <el-input v-model="presetFilters[col].max" placeholder="最大值" clearable style="width: 120px;" />
+            </div>
+            <span v-if="presetColumnList.length === 0" style="color: var(--el-text-color-placeholder); font-size: 13px;">请先选择包含列</span>
+          </div>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="presetDialogVisible = false">取消</el-button>
+        <el-button type="primary" @click="handleSavePreset" :loading="presetSaving">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -243,6 +359,8 @@ import { getLoginLogs, getAllLogs, getStorageStats, cleanupCache, getRuntimeLogs
 import { updateProfile, updatePwd } from '@/api/user'
 import { useUserStore } from '@/store/user'
 import { getRefreshToken } from '@/utils/token'
+import { getAllColumnMappings } from '@/api/columnMapping'
+import { getDefaultColumns, saveDefaultColumns, listPresets, savePreset, deletePreset } from '@/api/filterPreset'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -268,6 +386,9 @@ watch(
 )
 
 const saveInfo = async () => {
+  if (profileFormRef.value) {
+    try { await profileFormRef.value.validate() } catch { return }
+  }
   loading.value = true
   try {
     await updateProfile({
@@ -317,6 +438,11 @@ const pwdRules = reactive({
   confirmPassword: [{ required: true, validator: validatePass2, trigger: 'blur' }]
 })
 
+const profileFormRef = ref(null)
+const profileRules = reactive({
+  email: [{ type: 'email', message: '请输入有效的邮箱地址', trigger: 'blur' }]
+})
+
 const resetPwdForm = () => {
   pwdFormRef.value?.resetFields()
 }
@@ -346,6 +472,7 @@ const submitPwdChange = () => {
       }
     } catch (error) {
       console.error(error)
+      ElMessage.error(error?.message || '密码修改失败，请检查原密码是否正确')
     } finally {
       pwdLoading.value = false
     }
@@ -467,6 +594,11 @@ watch(activeTab, (val) => {
   } else {
     stopRuntimePolling()
   }
+  if (val === 'filterPref') {
+    loadColumnMappings()
+    loadDefaultColumns()
+    loadPresets()
+  }
 })
 
 onUnmounted(() => {
@@ -502,7 +634,7 @@ const scrollToBottom = () => {
 const startRuntimePolling = () => {
   stopRuntimePolling()
   runtimeTimer = setInterval(() => {
-    if (activeTab.value === 'runtime') fetchRuntimeLogs()
+    if (activeTab.value === 'runtime' && !runtimeLoading.value) fetchRuntimeLogs()
   }, 3000)
 }
 
@@ -510,6 +642,158 @@ const stopRuntimePolling = () => {
   if (runtimeTimer) {
     clearInterval(runtimeTimer)
     runtimeTimer = null
+  }
+}
+
+// ==================== 筛选偏好：默认全局筛选列 ====================
+const defaultFilterColumns = ref([])
+const defaultColumnsSaving = ref(false)
+const columnMappingLoading = ref(false)
+const columnMappingOptions = ref([])
+
+const loadColumnMappings = async () => {
+  columnMappingLoading.value = true
+  try {
+    const res = await getAllColumnMappings()
+    if (res) columnMappingOptions.value = res
+  } finally {
+    columnMappingLoading.value = false
+  }
+}
+
+const loadDefaultColumns = async () => {
+  try {
+    const res = await getDefaultColumns()
+    if (res && res.columnsJson) {
+      defaultFilterColumns.value = JSON.parse(res.columnsJson)
+    }
+  } catch (error) {
+    console.error('加载默认筛选列失败', error)
+  }
+}
+
+const handleSaveDefaultColumns = async () => {
+  defaultColumnsSaving.value = true
+  try {
+    await saveDefaultColumns(defaultFilterColumns.value)
+    ElMessage.success('默认筛选列保存成功')
+  } catch (error) {
+    ElMessage.error('保存失败，请重试')
+    console.error(error)
+  } finally {
+    defaultColumnsSaving.value = false
+  }
+}
+
+// ==================== 筛选偏好：条件预设模板 ====================
+const presetList = ref([])
+const presetLoading = ref(false)
+const presetDialogVisible = ref(false)
+const presetSaving = ref(false)
+const presetForm = reactive({ id: null, name: '', scope: 'all', columnsJson: '', filtersJson: '' })
+const presetColumnList = ref([])
+const presetFilters = reactive({})
+
+// 选中/取消列时自动同步 presetFilters 结构
+watch(presetColumnList, (newCols) => {
+  const newSet = new Set(newCols)
+  // 清理已取消的列
+  Object.keys(presetFilters).forEach(k => {
+    if (!newSet.has(k)) delete presetFilters[k]
+  })
+  // 为新增列创建默认 { min:'', max:'' }
+  newCols.forEach(col => {
+    if (!presetFilters[col]) {
+      presetFilters[col] = { min: '', max: '' }
+    }
+  })
+})
+
+const loadPresets = async () => {
+  presetLoading.value = true
+  try {
+    const res = await listPresets()
+    if (res) presetList.value = res
+  } finally {
+    presetLoading.value = false
+  }
+}
+
+const parseJson = (str, fallback) => {
+  if (!str) return fallback
+  try { return JSON.parse(str) } catch { return fallback }
+}
+
+const openPresetDialog = (row) => {
+  if (row && row.id) {
+    presetForm.id = row.id
+    presetForm.name = row.name
+    presetForm.scope = row.scope || 'all'
+    presetColumnList.value = parseJson(row.columnsJson, [])
+    const filters = parseJson(row.filtersJson, {})
+    // 先清空再填充
+    Object.keys(presetFilters).forEach(k => delete presetFilters[k])
+    Object.keys(filters).forEach(k => {
+      presetFilters[k] = filters[k] || { min: '', max: '' }
+    })
+  } else {
+    presetForm.id = null
+    presetForm.name = ''
+    presetForm.scope = 'all'
+    presetColumnList.value = []
+    Object.keys(presetFilters).forEach(k => delete presetFilters[k])
+  }
+  presetDialogVisible.value = true
+}
+
+const resetPresetForm = () => {
+  presetForm.id = null
+  presetForm.name = ''
+  presetForm.scope = 'all'
+  presetColumnList.value = []
+  Object.keys(presetFilters).forEach(k => delete presetFilters[k])
+}
+
+const handleSavePreset = async () => {
+  if (!presetForm.name.trim()) {
+    ElMessage.warning('请输入预设名称')
+    return
+  }
+  presetSaving.value = true
+  try {
+    const payload = {
+      id: presetForm.id,
+      name: presetForm.name.trim(),
+      scope: presetForm.scope,
+      columnsJson: JSON.stringify(presetColumnList.value),
+      filtersJson: JSON.stringify(presetFilters),
+      textFiltersJson: null
+    }
+    await savePreset(payload)
+    ElMessage.success(presetForm.id ? '预设更新成功' : '预设创建成功')
+    presetDialogVisible.value = false
+    await loadPresets()
+  } catch (error) {
+    ElMessage.error('保存失败，请重试')
+    console.error(error)
+  } finally {
+    presetSaving.value = false
+  }
+}
+
+const handleDeletePreset = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确定删除预设「${row.name}」？`, '删除预设', {
+      confirmButtonText: '确定删除', cancelButtonText: '取消', type: 'warning'
+    })
+  } catch { return }
+  try {
+    await deletePreset(row.id)
+    ElMessage.success('删除成功')
+    await loadPresets()
+  } catch (error) {
+    ElMessage.error('删除失败')
+    console.error(error)
   }
 }
 </script>
@@ -765,5 +1049,20 @@ const stopRuntimePolling = () => {
 
 .runtime-line.level-debug .runtime-msg {
   color: #6c7086;
+}
+
+/* ==================== 筛选偏好 ==================== */
+.pref-section-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+  margin-bottom: 6px;
+}
+
+.pref-section-desc {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 16px;
+  line-height: 1.6;
 }
 </style>
