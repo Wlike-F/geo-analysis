@@ -13,6 +13,7 @@ import com.xy.welllog.service.SysOperationLogService;
 import com.xy.welllog.service.SysUserService;
 import com.xy.welllog.utils.JwtUtils;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.util.StringUtils;
@@ -25,7 +26,11 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @RestController
 @RequestMapping("/sys/log")
 public class SysOperationLogController {
@@ -161,45 +166,63 @@ public class SysOperationLogController {
     }
 
     /**
-     * 清除缓存：一键清理已删除文件的残留数据和过期日志
+     * 清除缓存：一键清理已删除文件的残留数据和过期日志（多线程并行）
      */
     @PostMapping("/cleanup")
     public Result<Map<String, Object>> cleanup(HttpServletRequest request) {
         Long userId = getUserId(request);
-        if (userId == null) {
-            return Result.failed("用户未登录");
+        if (userId == null) return Result.failed("用户未登录");
+
+        Map<String, Object> result = new ConcurrentHashMap<>();
+
+        // 阶段1：先快速 COUNT 检查有没有数据，有才并行 DELETE
+        CompletableFuture<Integer> delRecords = CompletableFuture.supplyAsync(() ->
+            safeDelete(jdbcTemplate, "log_data_records",
+                "SELECT COUNT(*) FROM log_data_records WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)",
+                "DELETE FROM log_data_records WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)"));
+        CompletableFuture<Integer> delDirty = CompletableFuture.supplyAsync(() ->
+            safeDelete(jdbcTemplate, "log_dirty_data",
+                "SELECT COUNT(*) FROM log_dirty_data WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)",
+                "DELETE FROM log_dirty_data WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)"));
+        CompletableFuture<Integer> delLogs = CompletableFuture.supplyAsync(() ->
+            safeDelete(jdbcTemplate, "sys_operation_log",
+                "SELECT COUNT(*) FROM sys_operation_log WHERE create_time < DATE_SUB(NOW(), INTERVAL 30 DAY)",
+                "DELETE FROM sys_operation_log WHERE create_time < DATE_SUB(NOW(), INTERVAL 30 DAY)"));
+        CompletableFuture<Integer> delTokens = CompletableFuture.supplyAsync(() ->
+            safeDelete(jdbcTemplate, "sys_refresh_token",
+                "SELECT COUNT(*) FROM sys_refresh_token WHERE revoked = 1 OR expires_at < NOW()",
+                "DELETE FROM sys_refresh_token WHERE revoked = 1 OR expires_at < NOW()"));
+
+        // 阶段2：等待子表数据清完后，删除文件元数据
+        CompletableFuture<Void> delFiles = CompletableFuture.allOf(delRecords, delDirty)
+            .thenRunAsync(() -> {
+                int cnt = safeDelete(jdbcTemplate, "log_file_info",
+                    "SELECT COUNT(*) FROM log_file_info WHERE status = 2",
+                    "DELETE FROM log_file_info WHERE status = 2");
+                result.put("deletedFiles", cnt);
+            });
+
+        // 收集结果
+        try {
+            result.put("deletedRecords", delRecords.get(300, TimeUnit.SECONDS));
+            result.put("deletedDirty", delDirty.get(300, TimeUnit.SECONDS));
+            result.put("deletedLogs", delLogs.get(300, TimeUnit.SECONDS));
+            result.put("deletedTokens", delTokens.get(300, TimeUnit.SECONDS));
+            delFiles.get(300, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            result.putIfAbsent("error", e.getMessage());
         }
 
-        Map<String, Object> result = new LinkedHashMap<>();
-
-        // 1. 删除已删除文件(status=2)的明细数据
-        int deletedRecords = jdbcTemplate.update(
-                "DELETE FROM log_data_records WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)");
-        result.put("deletedRecords", deletedRecords);
-
-        // 2. 删除已删除文件的脏数据
-        int deletedDirty = jdbcTemplate.update(
-                "DELETE FROM log_dirty_data WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)");
-        result.put("deletedDirty", deletedDirty);
-
-        // 3. 物理删除已标记删除的文件元数据
-        int deletedFiles = jdbcTemplate.update(
-                "DELETE FROM log_file_info WHERE status = 2");
-        result.put("deletedFiles", deletedFiles);
-
-        // 4. 删除 30 天前的操作日志
-        int deletedLogs = jdbcTemplate.update(
-                "DELETE FROM sys_operation_log WHERE create_time < DATE_SUB(NOW(), INTERVAL 30 DAY)");
-        result.put("deletedLogs", deletedLogs);
-
-        // 5. 删除已撤销或已过期的刷新令牌
-        int deletedTokens = jdbcTemplate.update(
-                "DELETE FROM sys_refresh_token WHERE revoked = 1 OR expires_at < NOW()");
-        result.put("deletedTokens", deletedTokens);
-
         sysOperationLogService.recordLog("系统管理", "执行缓存清理", 0, 0L, userId);
-
         return Result.success(result, "缓存清理完成");
+    }
+
+    /** 先 COUNT 再 DELETE：无数据则直接返回 0，跳过全表扫描 */
+    private int safeDelete(JdbcTemplate jt, String tableName, String countSql, String deleteSql) {
+        Integer count = jt.queryForObject(countSql, Integer.class);
+        if (count == null || count == 0) return 0;
+        log.info("[清理] {} 待删除 {} 条", tableName, count);
+        return jt.update(deleteSql);
     }
 
     /**

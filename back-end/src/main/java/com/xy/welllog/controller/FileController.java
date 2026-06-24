@@ -27,6 +27,11 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -34,8 +39,10 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.TimeoutException;
 import java.util.zip.ZipOutputStream;
 import java.util.zip.ZipEntry;
 import com.alibaba.excel.ExcelWriter;
@@ -190,29 +197,41 @@ public class FileController {
 
         int submittedCount = 0;
         int skippedCount = 0;
-        for (File txtFile : txtFiles) {
-            try {
-                long exists = fileInfoService.count(new LambdaQueryWrapper<LogFileInfo>()
-                        .eq(LogFileInfo::getFileName, txtFile.getName()));
-                if (exists > 0) {
-                    skippedCount++;
-                    continue;
-                }
 
-                // 扫描模式下，先同步获取建议映射
-                PreviewResultDTO preview = logFileParseService.previewTxtStreamSync(txtFile, txtFile.getName());
-                
-                LogFileInfo fileInfo = new LogFileInfo();
-                fileInfo.setUserId(getUserId(request));
-                fileInfo.setFileName(txtFile.getName());
-                fileInfo.setStatus(0);
-                fileInfo.setCreateTime(new Date());
-                fileInfoService.save(fileInfo);
-                
-                logFileParseService.asyncParseAndSaveTxtStream(txtFile, txtFile.getName(), fileInfo.getId(), preview.getSuggestedMapping(), null);
-                submittedCount++;
+        // 并行预览所有文件（I/O + 解析密集，提速明显）
+        List<CompletableFuture<Boolean>> futures = new ArrayList<>();
+        for (File txtFile : txtFiles) {
+            futures.add(CompletableFuture.supplyAsync(() -> {
+                try {
+                    long exists = fileInfoService.count(new LambdaQueryWrapper<LogFileInfo>()
+                            .eq(LogFileInfo::getFileName, txtFile.getName()));
+                    if (exists > 0) return false; // skip
+
+                    PreviewResultDTO preview = logFileParseService.previewTxtStreamSync(txtFile, txtFile.getName());
+                    LogFileInfo fileInfo = new LogFileInfo();
+                    fileInfo.setUserId(getUserId(request));
+                    fileInfo.setFileName(txtFile.getName());
+                    fileInfo.setStatus(0);
+                    fileInfo.setCreateTime(new Date());
+                    fileInfoService.save(fileInfo);
+
+                    logFileParseService.asyncParseAndSaveTxtStream(txtFile, txtFile.getName(),
+                            fileInfo.getId(), preview.getSuggestedMapping(), null);
+                    return true;
+                } catch (Exception e) {
+                    log.warn("跳过不合规的文件: {}", txtFile.getName(), e);
+                    return false;
+                }
+            }));
+        }
+
+        // 等待全部完成
+        for (CompletableFuture<Boolean> f : futures) {
+            try {
+                if (f.get(60, TimeUnit.SECONDS)) submittedCount++;
+                else skippedCount++;
             } catch (Exception e) {
-                log.warn("跳过不合规的文件: {}", txtFile.getName(), e);
+                skippedCount++;
             }
         }
         
@@ -272,40 +291,56 @@ public class FileController {
             String zipFileName = URLEncoder.encode("测井数据报表集", StandardCharsets.UTF_8).replaceAll("\\+", "%20");
             response.setHeader("Content-disposition", "attachment;filename*=utf-8''" + zipFileName + ".zip");
 
-            try (ZipOutputStream zos = new ZipOutputStream(response.getOutputStream())) {
-                for (WellLogFileDTO fileDTO : exportDataList) {
+            // 阶段1：并行生成每个文件的 Excel byte[]
+            List<CompletableFuture<ExportZipPart>> futures = new ArrayList<>();
+            for (WellLogFileDTO fileDTO : exportDataList) {
+                futures.add(CompletableFuture.supplyAsync(() -> {
                     String excelFileName = fileDTO.getTitle();
                     int lastDotIndex = excelFileName.lastIndexOf(".");
-                    if (lastDotIndex > 0) {
-                        excelFileName = excelFileName.substring(0, lastDotIndex);
-                    }
+                    if (lastDotIndex > 0) excelFileName = excelFileName.substring(0, lastDotIndex);
                     excelFileName += ".xlsx";
-                    zos.putNextEntry(new ZipEntry(excelFileName));
 
                     List<List<String>> head = new ArrayList<>();
-                    if (fileDTO.getColumns() != null) {
+                    if (fileDTO.getColumns() != null)
                         for (String col : fileDTO.getColumns()) head.add(Collections.singletonList(col));
-                    }
+
                     List<List<Object>> dataList = new ArrayList<>();
                     if (fileDTO.getData() != null) {
                         for (Map<String, Object> map : fileDTO.getData()) {
                             List<Object> row = new ArrayList<>();
-                            if (fileDTO.getColumns() != null) {
+                            if (fileDTO.getColumns() != null)
                                 for (String col : fileDTO.getColumns()) row.add(map.getOrDefault(col, ""));
-                            }
                             dataList.add(row);
                         }
                     }
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    EasyExcel.write(bos).head(head).autoCloseStream(Boolean.FALSE).sheet("数据").doWrite(dataList);
+                    return new ExportZipPart(excelFileName, bos.toByteArray());
+                }));
+            }
 
-                    EasyExcel.write(zos).head(head).autoCloseStream(Boolean.FALSE).sheet("数据").doWrite(dataList);
+            // 阶段2：串行写入 ZIP
+            try (ZipOutputStream zos = new ZipOutputStream(response.getOutputStream())) {
+                for (CompletableFuture<ExportZipPart> f : futures) {
+                    ExportZipPart part = f.get(300, TimeUnit.SECONDS);
+                    if (part == null) continue;
+                    zos.putNextEntry(new ZipEntry(part.name));
+                    zos.write(part.bytes);
                     zos.closeEntry();
                 }
                 zos.finish();
             }
+
             operationLogService.recordLog("报表导出", "批量ZIP导出", exportDataList.size(), null, getUserId(request));
         } catch (Exception e) {
             log.error("批量导出ZIP异常", e);
         }
+    }
+
+    private static class ExportZipPart {
+        final String name;
+        final byte[] bytes;
+        ExportZipPart(String n, byte[] b) { name = n; bytes = b; }
     }
 
     @GetMapping("/list")
@@ -346,16 +381,15 @@ public class FileController {
 
         // --- 用 SQL 聚合代替全量加载 ---
 
-        // 1. 总记录数
-        Long recordCount = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM log_data_records WHERE file_id = ?", Long.class, id);
-        recordCount = recordCount != null ? recordCount : 0L;
+        // 总记录数 + 脏数据并行查询
+        CompletableFuture<Long> recordCountF = CompletableFuture.supplyAsync(() ->
+            jdbcTemplate.queryForObject("SELECT COUNT(*) FROM log_data_records WHERE file_id = ?", Long.class, id));
+        CompletableFuture<Long> dirtyCountF = CompletableFuture.supplyAsync(() ->
+            countDirtyLines(id));
 
-        // 2. 核心列聚合统计（排除哨兵值 -9999, -999.25, -999）
+        // 核心列聚合（一行 SQL 搞定，用 queryForObject 替代 queryForMap）
         String sentinelFilter = "(col IS NOT NULL AND col != -9999 AND col != -999.25 AND col != -999)";
-        Map<String, Map<String, Object>> sqlStats = new LinkedHashMap<>();
         String[] coreCols = {"depth", "ac", "den", "gr", "sp", "rt"};
-
         StringBuilder sql = new StringBuilder("SELECT ");
         List<String> selectParts = new ArrayList<>();
         for (String col : coreCols) {
@@ -368,19 +402,30 @@ public class FileController {
         sql.append(String.join(", ", selectParts));
         sql.append(" FROM log_data_records WHERE file_id = ?");
 
-        try {
-            Map<String, Object> row = jdbcTemplate.queryForMap(sql.toString(), id);
+        Map<String, Object> sqlRow = jdbcTemplate.queryForObject(sql.toString(),
+            (rs, rowNum) -> {
+                Map<String, Object> row = new HashMap<>();
+                for (int i = 1; i <= rs.getMetaData().getColumnCount(); i++) {
+                    row.put(rs.getMetaData().getColumnLabel(i), rs.getObject(i));
+                }
+                return row;
+            }, id);
+
+        Map<String, Map<String, Object>> sqlStats = new LinkedHashMap<>();
+        if (sqlRow != null) {
             for (String col : coreCols) {
                 Map<String, Object> stat = new HashMap<>();
-                stat.put("valid", toLong(row.get(col + "_valid")));
-                stat.put("invalid", toLong(row.get(col + "_invalid")));
-                stat.put("min", toDouble(row.get(col + "_min")));
-                stat.put("max", toDouble(row.get(col + "_max")));
+                stat.put("valid", toLong(sqlRow.get(col + "_valid")));
+                stat.put("invalid", toLong(sqlRow.get(col + "_invalid")));
+                stat.put("min", toDouble(sqlRow.get(col + "_min")));
+                stat.put("max", toDouble(sqlRow.get(col + "_max")));
                 sqlStats.put(col, stat);
             }
-        } catch (Exception e) {
-            log.warn("解析报告SQL聚合查询异常", e);
         }
+
+        long recordCount = 0, dirtyLineCount = 0;
+        try { Long rc = recordCountF.get(30, TimeUnit.SECONDS); recordCount = rc != null ? rc : 0; } catch (Exception e) {}
+        try { Long dc = dirtyCountF.get(30, TimeUnit.SECONDS); dirtyLineCount = dc != null ? dc : 0; } catch (Exception e) {}
 
         // 3. 构建列统计结果
         Map<String, ColumnReport> statsMap = new LinkedHashMap<>();
@@ -420,7 +465,7 @@ public class FileController {
         result.put("depthMin", depthMin);
         result.put("depthMax", depthMax);
         result.put("invalidValueCount", totalInvalidCount);
-        result.put("dirtyLineCount", countDirtyLines(id));
+        result.put("dirtyLineCount", dirtyLineCount);
         result.put("columnStats", new ArrayList<>(statsMap.values()));
 
         return Result.success(result);
@@ -632,7 +677,7 @@ public class FileController {
     @PostMapping("/{id}/layers/copy")
     public Result<String> copyLayersToFiles(@PathVariable Long id,
                                              @RequestBody List<Long> targetFileIds,
-                                             HttpServletRequest request) {
+                                             HttpServletRequest request) throws ExecutionException, InterruptedException, TimeoutException {
         Long userId = getUserId(request);
         LogFileInfo sourceFile = fileInfoService.getById(id);
         if (sourceFile == null || !sourceFile.getUserId().equals(userId)) {
@@ -652,29 +697,35 @@ public class FileController {
         }
 
         int copiedCount = 0;
+        // 并行复制到多个目标文件（每个目标文件的删+插独立）
+        List<CompletableFuture<Boolean>> futures = new ArrayList<>();
         for (Long targetId : targetFileIds) {
             if (targetId.equals(id)) continue;
-            LogFileInfo targetFile = fileInfoService.getById(targetId);
-            if (targetFile == null || !targetFile.getUserId().equals(userId)) continue;
+            futures.add(CompletableFuture.supplyAsync(() -> {
+                LogFileInfo targetFile = fileInfoService.getById(targetId);
+                if (targetFile == null || !targetFile.getUserId().equals(userId)) return false;
 
-            // 先删除目标文件已有的分层
-            wellLayerService.remove(new LambdaQueryWrapper<WellLayer>()
-                    .eq(WellLayer::getFileId, targetId));
+                wellLayerService.remove(new LambdaQueryWrapper<WellLayer>()
+                        .eq(WellLayer::getFileId, targetId));
 
-            // 复制源文件分层到目标文件
-            List<WellLayer> copies = new ArrayList<>();
-            for (WellLayer src : sourceLayers) {
-                WellLayer copy = new WellLayer();
-                copy.setFileId(targetId);
-                copy.setLayerName(src.getLayerName());
-                copy.setTopDepth(src.getTopDepth());
-                copy.setBottomDepth(src.getBottomDepth());
-                copy.setRemark(src.getRemark());
-                copy.setCreateTime(new Date());
-                copies.add(copy);
-            }
-            wellLayerService.saveBatch(copies);
-            copiedCount++;
+                List<WellLayer> copies = new ArrayList<>();
+                for (WellLayer src : sourceLayers) {
+                    WellLayer copy = new WellLayer();
+                    copy.setFileId(targetId);
+                    copy.setLayerName(src.getLayerName());
+                    copy.setTopDepth(src.getTopDepth());
+                    copy.setBottomDepth(src.getBottomDepth());
+                    copy.setRemark(src.getRemark());
+                    copy.setCreateTime(new Date());
+                    copies.add(copy);
+                }
+                wellLayerService.saveBatch(copies);
+                return true;
+            }));
+        }
+
+        for (CompletableFuture<Boolean> f : futures) {
+            if (f.get(60, TimeUnit.SECONDS)) copiedCount++;
         }
 
         operationLogService.recordLog("分层配置", "复制分层 [" + sourceFile.getFileName() + "] 到 " + copiedCount + " 个文件", copiedCount, null, userId);

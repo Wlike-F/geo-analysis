@@ -62,10 +62,15 @@
           </el-table-column>
           <el-table-column label="操作" width="380" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="success" link icon="DocumentChecked" :disabled="row.status !== 1" @click="handleParseReport(row)">报告</el-button>
+              <el-button size="small" type="success" link icon="DocumentChecked" :disabled="row.status !== 1" @click="handleParseReport(row)">解析报告</el-button>
               <el-button size="small" type="primary" link icon="View" :disabled="row.status !== 1" @click="handlePreview(row)">预览</el-button>
               <el-button size="small" type="warning" link icon="Menu" :disabled="row.status !== 1" @click="openLayerDialog(row)">分层</el-button>
-              <el-button size="small" type="info" link icon="Edit" :disabled="row.status !== 1" @click="openTextColumnDialog(row)">文本列</el-button>
+              <el-button size="small" type="info" link icon="Edit"
+                :disabled="row.status !== 1 || textColBackfilling[row.id]"
+                :loading="textColBackfilling[row.id]"
+                @click="openTextColumnDialog(row)">
+                {{ textColBackfilling[row.id] ? '回填中' : '文本列' }}
+              </el-button>
               <el-button size="small" type="danger" link icon="Delete" :disabled="row.status === 0" @click="handleDelete(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -406,6 +411,7 @@ const textColSaving = ref(false)
 const textColCandidates = ref([])
 const textColSelected = ref([])
 const textColCurrentFileId = ref(null)
+const textColBackfilling = reactive({})
 
 const openTextColumnDialog = async (row) => {
   textColCurrentFileId.value = row.id
@@ -430,17 +436,18 @@ const fetchTextColumnCandidates = async () => {
 }
 
 const saveTextColumnConfig = async () => {
-  textColSaving.value = true
+  const fileId = textColCurrentFileId.value
+  const cols = [...textColSelected.value]
+  textColDialogVisible.value = false
+  if (!fileId || cols.length === 0) return
+  textColBackfilling[fileId] = true
   try {
-    await request.post(`/data/${textColCurrentFileId.value}/text-columns`, {
-      columns: textColSelected.value
-    })
-    ElMessage.success('文本列配置已保存，数据回填中...')
-    textColDialogVisible.value = false
+    await request.post(`/data/${fileId}/text-columns`, { columns: cols })
+    ElMessage.success('文本列配置已保存，数据回填完成')
   } catch (error) {
     ElMessage.error(error?.message || '保存失败')
   } finally {
-    textColSaving.value = false
+    textColBackfilling[fileId] = false
   }
 }
 const allMappingOptions = ref([])

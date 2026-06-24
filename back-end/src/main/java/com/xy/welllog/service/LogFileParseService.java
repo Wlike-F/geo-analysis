@@ -10,13 +10,11 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.io.InputStreamReader;
+import java.io.*;
 import java.nio.charset.Charset;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 import com.alibaba.excel.EasyExcel;
@@ -331,23 +329,52 @@ public class LogFileParseService {
                 }).sheet().headRowNumber(0).doRead();
 
             } else {
-                // CSV/TXT: BufferedReader 流式逐行读取，自动检测编码
+                // CSV/TXT: 多线程分块并行解析
                 Charset charset = detectFileEncoding(file);
                 log.info("[解析] 编码检测结果: {}, 文件: {}", charset.name(), title);
-                try (BufferedReader br = new BufferedReader(
-                        new InputStreamReader(new FileInputStream(file), charset))) {
-                    String line;
-                    while ((line = br.readLine()) != null) {
-                        line = line.trim().replace("\uFEFF", "");
-                        if (line.isEmpty()) continue;
-                        if (isCsv) line = line.replaceAll(",", " ");
-                        processParsedLine(line, fileId, columns, compiledRules,
-                                totalRows, lineNum, dataStarted, batch, textColumns);
+                long fileSize = file.length();
+                int numThreads = Math.min(Runtime.getRuntime().availableProcessors(), 8);
+                // 文件小于 10MB 不启用多线程
+                if (fileSize < 10 * 1024 * 1024 || numThreads < 2) {
+                    try (BufferedReader br = new BufferedReader(
+                            new InputStreamReader(new FileInputStream(file), charset))) {
+                        String line;
+                        while ((line = br.readLine()) != null) {
+                            line = line.trim().replace("\uFEFF", "");
+                            if (line.isEmpty()) continue;
+                            if (isCsv) line = line.replaceAll(",", " ");
+                            processParsedLine(line, fileId, columns, compiledRules,
+                                    totalRows, lineNum, dataStarted, batch, textColumns);
+                        }
                     }
-                }
-                if (!batch.isEmpty()) {
-                    dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules, textColumns);
-                    batch.clear();
+                    if (!batch.isEmpty()) {
+                        dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules, textColumns);
+                        batch.clear();
+                    }
+                } else {
+                    log.info("[解析] 启用 {} 线程并行解析, 文件大小 {} MB", numThreads, fileSize / 1024 / 1024);
+                    long chunkSize = fileSize / numThreads;
+                    AtomicInteger atomicTotalRows = new AtomicInteger(0);
+                    ExecutorService pool = Executors.newFixedThreadPool(numThreads);
+                    List<Future<?>> futures = new ArrayList<>();
+
+                    for (int i = 0; i < numThreads; i++) {
+                        final long chunkStart = i * chunkSize;
+                        final long chunkEnd = (i == numThreads - 1) ? fileSize : (i + 1) * chunkSize;
+                        final int chunkIdx = i;
+                        futures.add(pool.submit(() -> {
+                            parseChunk(file, charset, isCsv, chunkStart, chunkEnd, chunkIdx,
+                                    fileId, columns, compiledRules, textColumns, atomicTotalRows);
+                        }));
+                    }
+
+                    pool.shutdown();
+                    for (Future<?> f : futures) {
+                        try { f.get(30, TimeUnit.MINUTES); } catch (Exception e) {
+                            log.error("[解析] 线程异常", e);
+                        }
+                    }
+                    totalRows[0] = atomicTotalRows.get();
                 }
             }
 
@@ -410,6 +437,56 @@ public class LogFileParseService {
             dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules, textColumns);
             batch.clear();
         }
+    }
+
+    /**
+     * 单线程解析文件的一个字节区间 [chunkStart, chunkEnd)。
+     */
+    private void parseChunk(File file, Charset charset, boolean isCsv,
+                            long chunkStart, long chunkEnd, int chunkIdx,
+                            Long fileId, List<String> columns,
+                            Map<String, Pattern> compiledRules,
+                            Map<String, String> textColumns,
+                            AtomicInteger totalRows) {
+        final int[] localRows = {0};
+        final long[] lineNum = {0};
+        final boolean[] dataStarted = {chunkIdx > 0};
+        final List<Map<String, Object>> batch = new ArrayList<>(2000);
+
+        try (InputStream in = new BufferedInputStream(new FileInputStream(file))) {
+            long skipped = 0;
+            while (skipped < chunkStart) {
+                long s = in.skip(chunkStart - skipped);
+                if (s <= 0) break;
+                skipped += s;
+            }
+            // 非首块：跳过行残片
+            if (chunkIdx > 0) {
+                byte[] buf = new byte[1];
+                while (in.read(buf) != -1 && buf[0] != '\n');
+            }
+            BufferedReader br = new BufferedReader(new InputStreamReader(in, charset));
+            String line;
+            long bytesRead = chunkStart;
+            int chunkCount = 0;
+            while ((line = br.readLine()) != null) {
+                line = line.trim().replace("\uFEFF", "");
+                if (line.isEmpty()) continue;
+                bytesRead += line.getBytes(charset).length + 1;
+                if (isCsv) line = line.replaceAll(",", " ");
+                processParsedLine(line, fileId, columns, compiledRules,
+                        localRows, lineNum, dataStarted, batch, textColumns);
+                chunkCount++;
+                if (bytesRead > chunkEnd) break;
+            }
+            if (!batch.isEmpty()) {
+                dataRecordService.processAndSaveBatch(fileId, columns, batch, compiledRules, textColumns);
+            }
+            log.debug("[解析] 分块 {}: 处理 {} 行, 入库 {} 行", chunkIdx, chunkCount, localRows[0]);
+        } catch (Exception e) {
+            log.error("[解析] 分块 {} 异常: fileId={}", chunkIdx, fileId, e);
+        }
+        totalRows.addAndGet(localRows[0]);
     }
 
     /**

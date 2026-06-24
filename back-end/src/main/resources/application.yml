@@ -13,6 +13,12 @@ spring:
     username: root
     password:
     driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      minimum-idle: 2
+      maximum-pool-size: 8
+      connection-timeout: 5000
+      idle-timeout: 600000
+      pool-name: WellLogPool
   data:
     redis:
       host: 127.0.0.1

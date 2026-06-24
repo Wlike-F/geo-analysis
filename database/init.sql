@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS `log_data_records` (
   `text_col_10` VARCHAR(200),
   
   -- 利用复合索引加速查询 --
+  INDEX `idx_file_id_simple` (`file_id`),
   INDEX `idx_file_depth` (`file_id`, `depth`),
   INDEX `idx_file_main` (`file_id`, `ac`, `den`, `gr`),
   INDEX `idx_file_text1` (`file_id`, `text_col_1`),

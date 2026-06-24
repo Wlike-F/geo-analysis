@@ -35,7 +35,7 @@ public class LogDataRecordServiceImpl extends ServiceImpl<LogDataRecordMapper, L
      */
     @Transactional(rollbackFor = Exception.class)
     public void batchInsert(List<LogDataRecord> records) {
-        jdbcTemplate.batchUpdate(INSERT_SQL, records, 10000, (PreparedStatement ps, LogDataRecord r) -> {
+        jdbcTemplate.batchUpdate(INSERT_SQL, records, 2000, (PreparedStatement ps, LogDataRecord r) -> {
             ps.setLong(1, r.getFileId());
             setBigDecimal(ps, 2, r.getDepth());
             setBigDecimal(ps, 3, r.getAc());
@@ -132,7 +132,7 @@ public class LogDataRecordServiceImpl extends ServiceImpl<LogDataRecordMapper, L
             }
             batchList.add(record);
 
-            if (batchList.size() >= 10000) {
+            if (batchList.size() >= 2000) {
                 batchInsert(batchList);
                 batchList.clear();
             }
