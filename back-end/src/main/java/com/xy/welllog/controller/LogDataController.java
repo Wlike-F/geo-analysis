@@ -82,11 +82,25 @@ public class LogDataController {
                 }
             }
         }
-        return 1L;
+        return null;
+    }
+
+    /** 校验文件所有权，不匹配时抛异常 */
+    private void checkFileOwnership(Long fileId, Long userId) {
+        if (userId == null) throw new RuntimeException("未登录");
+        LogFileInfo fi = fileInfoService.getById(fileId);
+        checkFileOwnership(fi, userId);
+    }
+    private void checkFileOwnership(LogFileInfo fi, Long userId) {
+        if (userId == null) throw new RuntimeException("未登录");
+        if (fi == null || !fi.getUserId().equals(userId))
+            throw new RuntimeException("无权访问该文件");
     }
 
     @PostMapping("/page")
-    public Result<Page<Map<String, Object>>> pageQuery(@RequestBody LogDataQueryDTO query) {
+    public Result<Page<Map<String, Object>>> pageQuery(@RequestBody LogDataQueryDTO query, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        checkFileOwnership(query.getFileId(), userId);
         long current = query.getCurrent() == null || query.getCurrent() < 1 ? 1L : query.getCurrent();
         long size = query.getSize() == null || query.getSize() < 1 ? 100L : Math.min(query.getSize(), 10000L);
 
@@ -129,8 +143,8 @@ public class LogDataController {
                 if (range.getMin() == null && range.getMax() == null) continue;
                 String dbCol = getMappedDbColumn(col.toLowerCase());
                 if (dbCol.equals("unmapped")) {
-                    if (range.getMin() != null) wrapper.apply("JSON_EXTRACT(extra_json, '$." + col + "') >= {0}", range.getMin());
-                    if (range.getMax() != null) wrapper.apply("JSON_EXTRACT(extra_json, '$." + col + "') <= {0}", range.getMax());
+                    if (range.getMin() != null) wrapper.apply("JSON_EXTRACT(extra_json, CONCAT('$.', {0})) >= {1}", col, range.getMin());
+                    if (range.getMax() != null) wrapper.apply("JSON_EXTRACT(extra_json, CONCAT('$.', {0})) <= {1}", col, range.getMax());
                 } else {
                     if (range.getMin() != null) wrapper.ge(dbCol, range.getMin());
                     if (range.getMax() != null) wrapper.le(dbCol, range.getMax());
@@ -146,16 +160,29 @@ public class LogDataController {
         }
         Page<LogDataRecord> recordPage = dataRecordService.page(pageParam, wrapper);
 
+        // 文本列值补充：因 select=false，MyBatis-Plus 不查 text_col_N，用 JdbcTemplate 单独取
+        Map<Long, Map<String, String>> textColValues = Collections.emptyMap();
+        if (!textColMapping.isEmpty() && !recordPage.getRecords().isEmpty()) {
+            textColValues = loadTextColumnValues(recordPage.getRecords(), textColMapping);
+        }
+
         // 无筛选时总数用元数据（瞬时），有筛选时用实查 COUNT
         long total = hasFilters ? recordPage.getTotal() : (fileInfo != null && fileInfo.getTotalRows() != null ? fileInfo.getTotalRows() : recordPage.getTotal());
         List<Map<String, Object>> mapList = new ArrayList<>(recordPage.getRecords().size());
         for (LogDataRecord record : recordPage.getRecords()) {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("id", record.getId());
+            Map<String, String> textVals = textColValues.getOrDefault(record.getId(), Collections.emptyMap());
             for (String colName : cols) {
-                java.util.function.Function<LogDataRecord, Object> reader = columnReaders.get(colName);
-                Object val = reader != null ? reader.apply(record) : null;
-                map.put(colName, val != null ? val : "");
+                // 文本列优先从补充查询取值，其次走 reader
+                String textVal = textVals.get(colName);
+                if (textVal != null) {
+                    map.put(colName, textVal);
+                } else {
+                    java.util.function.Function<LogDataRecord, Object> reader = columnReaders.get(colName);
+                    Object val = reader != null ? reader.apply(record) : null;
+                    map.put(colName, val != null ? val : "");
+                }
             }
             if (record.getExtraJson() != null && !record.getExtraJson().isEmpty()) {
                 map.putAll(record.getExtraJson());
@@ -189,6 +216,22 @@ public class LogDataController {
         return readers;
     }
 
+    private java.util.function.Function<LogDataRecord, Object> textColGetter(String colName) {
+        switch (colName) {
+            case "text_col_1": return LogDataRecord::getTextCol1;
+            case "text_col_2": return LogDataRecord::getTextCol2;
+            case "text_col_3": return LogDataRecord::getTextCol3;
+            case "text_col_4": return LogDataRecord::getTextCol4;
+            case "text_col_5": return LogDataRecord::getTextCol5;
+            case "text_col_6": return LogDataRecord::getTextCol6;
+            case "text_col_7": return LogDataRecord::getTextCol7;
+            case "text_col_8": return LogDataRecord::getTextCol8;
+            case "text_col_9": return LogDataRecord::getTextCol9;
+            case "text_col_10": return LogDataRecord::getTextCol10;
+            default: return r -> null;
+        }
+    }
+
     /** 从已缓存的 textColMapping 中解析文本列映射，不再查 DB */
     private String resolveTextCol(Map<String, String> mapping, String col) {
         if (mapping.isEmpty()) return null;
@@ -196,6 +239,31 @@ public class LogDataController {
         if (v == null) v = mapping.get(col.toLowerCase());
         if (v == null) v = mapping.get(col.toUpperCase());
         return (v != null && isValidTextCol(v)) ? v : null;
+    }
+
+    /** 批量查询文本列值（兼容 select=false 的旧数据库，text_col_N 不在 MyBatis-Plus SELECT 中） */
+    private Map<Long, Map<String, String>> loadTextColumnValues(
+            List<LogDataRecord> records, Map<String, String> textColMapping) {
+        if (records.isEmpty() || textColMapping.isEmpty()) return Collections.emptyMap();
+        String ids = records.stream().map(r -> String.valueOf(r.getId())).collect(java.util.stream.Collectors.joining(","));
+        Map<Long, Map<String, String>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : textColMapping.entrySet()) {
+            String colName = e.getKey();
+            String textCol = e.getValue();
+            try {
+                List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    "SELECT id, " + textCol + " FROM log_data_records WHERE id IN (" + ids + ")");
+                for (Map<String, Object> row : rows) {
+                    Long id = ((Number) row.get("id")).longValue();
+                    Object val = row.get(textCol);
+                    result.computeIfAbsent(id, k -> new LinkedHashMap<>())
+                          .put(colName, val != null ? String.valueOf(val) : "");
+                }
+            } catch (Exception ex) {
+                log.warn("[查询] 文本列 {} 查询失败: {}", textCol, ex.getMessage());
+            }
+        }
+        return result;
     }
 
     private String getMappedDbColumn(String colLower) {
@@ -224,6 +292,16 @@ public class LogDataController {
      * 根据文件的 text_columns_json 配置，获取原始列名对应的 text_col_N 数据库字段。
      * 返回结果经过白名单校验，不合法的列名返回 null。
      */
+    private String getTextDbColumnFrom(LogFileInfo fileInfo, String originalColName) {
+        if (fileInfo == null || fileInfo.getTextColumnsJson() == null) return null;
+        Map<String, String> mapping = JSONUtil.toBean(fileInfo.getTextColumnsJson(), Map.class);
+        String mapped = mapping.get(originalColName);
+        if (mapped == null) mapped = mapping.get(originalColName.toLowerCase());
+        if (mapped == null) mapped = mapping.get(originalColName.toUpperCase());
+        if (mapped != null && !isValidTextCol(mapped)) return null;
+        return mapped;
+    }
+
     private String getTextDbColumn(Long fileId, String originalColName) {
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
         if (fileInfo == null || fileInfo.getTextColumnsJson() == null) return null;
@@ -245,11 +323,14 @@ public class LogDataController {
      */
     @GetMapping("/{fileId}/distinct-values")
     public Result<List<String>> getDistinctValues(@PathVariable Long fileId,
-                                                   @RequestParam String column) {
+                                                   @RequestParam String column,
+                                                   HttpServletRequest request) {
+        Long userId = getUserId(request);
+        checkFileOwnership(fileId, userId);
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
         if (fileInfo == null) return Result.failed("文件不存在");
 
-        String dbColumn = getTextDbColumn(fileId, column);
+        String dbColumn = getTextDbColumnFrom(fileInfo, column);
         if (dbColumn == null) {
             return Result.failed("列 [" + column + "] 未配置为文本列");
         }
@@ -267,9 +348,12 @@ public class LogDataController {
      * 扫描候选文本列（前500行分析）
      */
     @GetMapping("/{fileId}/text-columns/candidates")
-    public Result<List<Map<String, Object>>> scanTextColumnCandidates(@PathVariable Long fileId) {
+    public Result<List<Map<String, Object>>> scanTextColumnCandidates(@PathVariable Long fileId,
+                                                                       HttpServletRequest request) {
+        Long userId = getUserId(request);
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
         if (fileInfo == null) return Result.failed("文件不存在");
+        checkFileOwnership(fileInfo, userId);
 
         String columnsJson = fileInfo.getColumnsJson();
         if (columnsJson == null || columnsJson.isEmpty()) {
@@ -308,7 +392,7 @@ public class LogDataController {
             boolean suggested = false;
 
             // 判定规则
-            boolean nameHint = col.matches(".*(岩性|地层|层位|解释|结论|lith|formation|layer|text|desc|facies).*");
+            boolean nameHint = col.matches("(?i).*(岩性|地层|层位|解释|结论|lith|formation|layer|text|desc|facies).*");
             if (nameHint && nonNumericRate > 50) {
                 reason = "列名+数据类型";
                 suggested = true;
@@ -334,9 +418,12 @@ public class LogDataController {
 
     @PostMapping("/{fileId}/text-columns")
     public Result<String> saveTextColumns(@PathVariable Long fileId,
-                                           @RequestBody Map<String, Object> body) {
+                                           @RequestBody Map<String, Object> body,
+                                           HttpServletRequest request) {
+        Long userId = getUserId(request);
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
         if (fileInfo == null) return Result.failed("文件不存在");
+        checkFileOwnership(fileInfo, userId);
 
         // 支持两种格式: {columns: ["岩性","解释结论"]} 或 {原始列名: text_col_N}
         Map<String, String> mapping = new LinkedHashMap<>();
@@ -398,7 +485,7 @@ public class LogDataController {
         }
 
         boolean allSuccess = futures.stream()
-                .map(f -> { try { return f.get(); } catch (Exception e) { return false; } })
+                .map(f -> { try { return f.get(120, TimeUnit.SECONDS); } catch (Exception e) { return false; } })
                 .allMatch(Boolean.TRUE::equals);
 
         return Result.success(allSuccess
@@ -410,9 +497,12 @@ public class LogDataController {
      * 获取文件的文本列配置
      */
     @GetMapping("/{fileId}/text-columns")
-    public Result<Map<String, String>> getTextColumns(@PathVariable Long fileId) {
+    public Result<Map<String, String>> getTextColumns(@PathVariable Long fileId,
+                                                        HttpServletRequest request) {
+        Long userId = getUserId(request);
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
         if (fileInfo == null) return Result.failed("文件不存在");
+        checkFileOwnership(fileInfo, userId);
 
         if (fileInfo.getTextColumnsJson() == null || fileInfo.getTextColumnsJson().isEmpty()) {
             return Result.success(new LinkedHashMap<>());
@@ -497,6 +587,7 @@ public class LogDataController {
     public void exportExcel(@PathVariable Long fileId, @RequestBody(required = false) LogDataQueryDTO query, HttpServletRequest request, HttpServletResponse response) {
         if (query == null) query = new LogDataQueryDTO();
         query.setFileId(fileId);
+        checkFileOwnership(fileId, getUserId(request));
 
         List<String> cols = getColumns(fileId);
         log.info("[导出] 开始Excel导出: fileId={}, 列数={}", fileId, cols.size());
@@ -724,8 +815,12 @@ public class LogDataController {
     private static final int ECHARTS_MAX_POINTS = 5000;
 
     @GetMapping("/echarts/{fileId}")
-    public Result<Map<String, List<Object>>> getEchartsData(@PathVariable Long fileId) {
+    public Result<Map<String, List<Object>>> getEchartsData(@PathVariable Long fileId,
+                                                              HttpServletRequest request) {
+        Long userId = getUserId(request);
         LogFileInfo fileInfo = fileInfoService.getById(fileId);
+        if (fileInfo == null) return Result.failed("文件不存在");
+        checkFileOwnership(fileInfo, userId);
         List<String> cols;
         if (fileInfo != null && fileInfo.getColumnsJson() != null) {
             cols = JSONUtil.toList(fileInfo.getColumnsJson(), String.class);

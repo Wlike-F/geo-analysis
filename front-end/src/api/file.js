@@ -11,7 +11,7 @@ export function uploadTxtFile(data) {
 export function scanServerPath(params) {
   return request({
     url: '/file/scan',
-    method: 'get',
+    method: 'post',
     params
   })
 }

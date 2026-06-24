@@ -40,13 +40,22 @@ public class UserController {
 
     private Long getUserId(HttpServletRequest request) {
         String username = getUsername(request);
-        if (!StringUtils.hasText(username)) {
-            return 1L;
-        }
+        if (!StringUtils.hasText(username)) return null;
         LambdaQueryWrapper<SysUser> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(SysUser::getUsername, username);
         SysUser user = sysUserService.getOne(wrapper);
-        return user != null ? user.getId() : 1L;
+        return user != null ? user.getId() : null;
+    }
+
+    /** 校验管理员权限 */
+    private void checkAdmin(HttpServletRequest request) {
+        String username = getUsername(request);
+        if (username == null) throw new RuntimeException("请先登录");
+        LambdaQueryWrapper<SysUser> w = new LambdaQueryWrapper<>();
+        w.eq(SysUser::getUsername, username);
+        SysUser user = sysUserService.getOne(w);
+        if (user == null || !"admin".equals(user.getRole()))
+            throw new RuntimeException("无管理员权限");
     }
 
     /**
@@ -142,7 +151,9 @@ public class UserController {
      */
     @GetMapping("/page")
     public Result<Page<SysUser>> page(@RequestParam(defaultValue = "1") Integer current,
-                                      @RequestParam(defaultValue = "10") Integer size) {
+                                      @RequestParam(defaultValue = "10") Integer size,
+                                      HttpServletRequest request) {
+        checkAdmin(request);
         Page<SysUser> pageParam = new Page<>(current, size);
         // 按管理员角色排序，保证管理员用户在前面，方便管理员查看和操作,内部排序按创建时间升序
         Page<SysUser> userPage = sysUserService.page(pageParam,
@@ -157,6 +168,7 @@ public class UserController {
      */
     @PostMapping("/add")
     public Result<Void> add(@RequestBody SysUser user, HttpServletRequest request) {
+        checkAdmin(request);
         long count = sysUserService.count(new LambdaQueryWrapper<SysUser>().eq(SysUser::getUsername, user.getUsername()));
         if (count > 0) return Result.failed("用户名已存在");
 
@@ -178,6 +190,7 @@ public class UserController {
      */
     @PostMapping("/update")
     public Result<Void> update(@RequestBody SysUser user, HttpServletRequest request) {
+        checkAdmin(request);
         SysUser exist = sysUserService.getById(user.getId());
         if (exist != null) {
             exist.setEmail(user.getEmail());
@@ -196,6 +209,7 @@ public class UserController {
      */
     @DeleteMapping("/{id}")
     public Result<Void> delete(@PathVariable Long id, HttpServletRequest request) {
+        checkAdmin(request);
         SysUser exist = sysUserService.getById(id);
         sysUserService.removeById(id);
         String target = exist != null ? exist.getUsername() : String.valueOf(id);

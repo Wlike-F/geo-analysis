@@ -50,22 +50,26 @@ public class SysFilterPresetController {
                 }
             }
         }
-        return 1L;
+        return null;
+    }
+    private Long getRequiredUserId(HttpServletRequest request) {
+        Long uid = getUserId(request);
+        if (uid == null) throw new RuntimeException("请先登录");
+        return uid;
     }
 
     // ============ 默认全局筛选列 ============
 
-    /** 取我的默认列配置 */
     @GetMapping("/default-columns")
     public Result<SysFilterPreset> getDefaultColumns(HttpServletRequest request) {
-        Long userId = getUserId(request);
+        Long userId = getRequiredUserId(request);
         return Result.success(sysFilterPresetService.getDefaultColumns(userId));
     }
 
     /** 保存（新建或更新）我的默认列配置 */
     @PostMapping("/default-columns")
     public Result<SysFilterPreset> saveDefaultColumns(@RequestBody DefaultColumnsDTO dto, HttpServletRequest request) {
-        Long userId = getUserId(request);
+        Long userId = getRequiredUserId(request);
         SysFilterPreset saved = sysFilterPresetService.saveDefaultColumns(userId, dto.getColumnsJson());
         operationLogService.recordLog("筛选偏好", "更新默认全局筛选列", 0, 0L, userId);
         log.info("[筛选偏好] 用户{} 更新默认全局筛选列", userId);
@@ -83,14 +87,14 @@ public class SysFilterPresetController {
     /** 列出我的所有预设模板 */
     @GetMapping("/preset")
     public Result<List<SysFilterPreset>> listPresets(HttpServletRequest request) {
-        Long userId = getUserId(request);
+        Long userId = getRequiredUserId(request);
         return Result.success(sysFilterPresetService.listPresets(userId));
     }
 
     /** 取单个预设详情 */
     @GetMapping("/preset/{id}")
     public Result<SysFilterPreset> getPreset(@PathVariable Long id, HttpServletRequest request) {
-        Long userId = getUserId(request);
+        Long userId = getRequiredUserId(request);
         SysFilterPreset preset = sysFilterPresetService.getById(id);
         if (preset == null || !userId.equals(preset.getUserId())) {
             return Result.failed("预设不存在或无权访问");
@@ -101,7 +105,7 @@ public class SysFilterPresetController {
     /** 新建或更新一个预设模板 */
     @PostMapping("/preset")
     public Result<SysFilterPreset> savePreset(@RequestBody SysFilterPreset preset, HttpServletRequest request) {
-        Long userId = getUserId(request);
+        Long userId = getRequiredUserId(request);
         try {
             boolean isCreate = preset.getId() == null;
             SysFilterPreset saved = sysFilterPresetService.savePreset(userId, preset);
@@ -116,7 +120,7 @@ public class SysFilterPresetController {
     /** 删除一个预设模板 */
     @DeleteMapping("/preset/{id}")
     public Result<Void> deletePreset(@PathVariable Long id, HttpServletRequest request) {
-        Long userId = getUserId(request);
+        Long userId = getRequiredUserId(request);
         SysFilterPreset existing = sysFilterPresetService.getById(id);
         if (existing == null || !userId.equals(existing.getUserId())) {
             return Result.failed("预设不存在或无权删除");

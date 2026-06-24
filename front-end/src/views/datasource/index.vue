@@ -21,6 +21,7 @@
               </template>
             </el-input>
 
+            <el-button type="primary" plain icon="Refresh" @click="getTableData" :loading="loading">刷新</el-button>
             <el-button type="primary" icon="FolderOpened" @click="handleScanDialogOpen">服务器目录扫描</el-button>
 
             <el-upload
@@ -39,17 +40,17 @@
       </template>
 
       <div class="table-card">
-        <el-table v-loading="loading" :data="tableData" stripe border>
-          <el-table-column prop="id" label="文件 ID" width="100" />
-          <el-table-column prop="fileName" label="文件名称" min-width="140" show-overflow-tooltip />
+        <el-table v-if="tableData.length > 0" v-loading="loading" :data="tableData" stripe border>
+          <el-table-column prop="id" label="文件 ID" width="100" align="center"/>
+          <el-table-column prop="fileName" label="文件名称" min-width="80" show-overflow-tooltip />
           <el-table-column prop="totalRows" label="数据量(行)" width="120" align="center" />
-          <el-table-column label="解析列名预览" show-overflow-tooltip>
+          <el-table-column label="解析列名预览" show-overflow-tooltip width="450">
             <template #default="{ row }">
               {{ formatColumns(row.columnsJson) }}
             </template>
           </el-table-column>
-          <el-table-column prop="createTime" label="上传时间" width="180" />
-          <el-table-column label="状态" width="120" align="center">
+          <el-table-column prop="createTime" label="上传时间" width="180" align="center" />
+          <el-table-column label="状态" width="100" align="center">
             <template #default="{ row }">
               <el-tag v-if="row.status === 1" type="success">可用</el-tag>
               <el-tag v-else-if="row.status === 0" type="primary" effect="light">
@@ -62,7 +63,12 @@
           </el-table-column>
           <el-table-column label="操作" width="380" fixed="right" align="center">
             <template #default="{ row }">
-              <el-button size="small" type="success" link icon="DocumentChecked" :disabled="row.status !== 1" @click="handleParseReport(row)">解析报告</el-button>
+              <el-button size="small" type="success" link icon="DocumentChecked"
+                :disabled="row.status !== 1"
+                :loading="row.status === 1 && !row.columnStatsJson"
+                @click="handleParseReport(row)">
+                {{ row.status === 1 && !row.columnStatsJson ? '解析中...' : '解析报告' }}
+              </el-button>
               <el-button size="small" type="primary" link icon="View" :disabled="row.status !== 1" @click="handlePreview(row)">预览</el-button>
               <el-button size="small" type="warning" link icon="Menu" :disabled="row.status !== 1" @click="openLayerDialog(row)">分层</el-button>
               <el-button size="small" type="info" link icon="Edit"
@@ -185,7 +191,22 @@
         show-icon
         class="sandbox-alert"
       />
-      <div class="sandbox-file-title">文件：{{ previewSummary.originalFileName }}</div>
+      <div class="sandbox-file-title">
+        文件：{{ previewSummary.originalFileName }}
+        <el-button size="small" type="warning" plain style="margin-left:12px"
+          @click="showTextColConfig = !showTextColConfig">
+          配置文本列 {{ sandboxTextCols.length > 0 ? `(${sandboxTextCols.length})` : '' }}
+        </el-button>
+      </div>
+      <div v-if="showTextColConfig" class="sandbox-textcol-config">
+        <div class="sandbox-textcol-hint">标记为文本类型的列将通过"多选筛选"，请勾选需要标记的列（如岩性、地层等）：</div>
+        <el-checkbox-group v-model="sandboxTextCols">
+          <el-checkbox v-for="h in previewSummary.originalHeaders" :key="h" :label="h" :value="h">
+            {{ h }}
+            <el-tag v-if="isSandboxTextSuggestion(h)" size="small" type="warning" effect="plain" style="margin-left:6px">推荐</el-tag>
+          </el-checkbox>
+        </el-checkbox-group>
+      </div>
       <el-table :data="previewSummary.previewData" border stripe max-height="400">
         <el-table-column v-for="(header, index) in previewSummary.originalHeaders" :key="index" min-width="160">
           <template #header>
@@ -403,6 +424,26 @@ const scanning = ref(false)
 
 const sandboxVisible = ref(false)
 const sandboxLoading = ref(false)
+
+// ========== 沙盒内文本列配置 ==========
+const showTextColConfig = ref(false)
+const sandboxTextCols = ref([])
+const TEXT_COL_KEYWORDS = /岩性|地层|层位|解释|结论|岩相|lith|formation|layer|facies|desc/i
+
+const isSandboxTextSuggestion = (header) => {
+  if (TEXT_COL_KEYWORDS.test(header)) return true
+  // 检查前100行中非数值率
+  const data = previewSummary.value?.previewData || []
+  if (data.length === 0) return false
+  let nonNumeric = 0, total = 0
+  for (const row of data) {
+    const v = row[header]
+    if (v === null || v === undefined || v === '') continue
+    total++
+    if (isNaN(Number(v))) nonNumeric++
+  }
+  return total > 0 && nonNumeric / total > 0.7
+}
 
 // ========== 文本列配置 ==========
 const textColDialogVisible = ref(false)
@@ -810,6 +851,8 @@ const customUpload = async (options) => {
     res.originalSuggestedMapping = [...(res.suggestedMapping || [])]
     previewSummary.value = res
     sandboxVisible.value = true
+    sandboxTextCols.value = []
+    showTextColConfig.value = false
   } catch (error) {
     ElMessage.error(error.message || '预览生成失败')
   } finally {
@@ -820,13 +863,21 @@ const customUpload = async (options) => {
 const confirmSandbox = async () => {
   sandboxLoading.value = true
   try {
+    // 构建 textColumns 映射：{原始列名: text_col_N}
+    const textCols = {}
+    sandboxTextCols.value.forEach((col, i) => {
+      if (i < 10) textCols[col] = `text_col_${i + 1}`
+    })
     await request.post('/file/confirm', {
       tempFilePath: previewSummary.value.tempFilePath,
       originalFileName: previewSummary.value.originalFileName,
-      confirmedMapping: previewSummary.value.suggestedMapping
+      confirmedMapping: previewSummary.value.suggestedMapping,
+      textColumns: Object.keys(textCols).length > 0 ? textCols : undefined
     })
     ElMessage.success('映射确认成功，开始入库')
     sandboxVisible.value = false
+    showTextColConfig.value = false
+    sandboxTextCols.value = []
     getTableData()
   } catch (error) {
     ElMessage.error(error.message || '确认失败')
@@ -846,7 +897,7 @@ const confirmScan = async () => {
   }
   scanning.value = true
   try {
-    await request.get('/file/scan', { params: { path: scanPath.value } })
+    await request.post('/file/scan', null, { params: { path: scanPath.value } })
     ElMessage.success('扫描完成')
     scanDialogVisible.value = false
     pageParams.current = 1
@@ -995,6 +1046,12 @@ onUnmounted(() => {
   align-items: center;
   justify-content: flex-end;
 }
+.header-actions .el-button + .el-button {
+  margin-left: 0;
+}
+.header-actions .el-upload + .el-button {
+  margin-left: 0;
+}
 
 .search-input {
   width: 220px;
@@ -1034,6 +1091,24 @@ onUnmounted(() => {
   font-size: 16px;
   font-weight: 700;
   color: var(--el-text-color-primary);
+  display: flex;
+  align-items: center;
+}
+.sandbox-textcol-config {
+  margin: 10px 0 16px;
+  padding: 12px 14px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+  border: 1px dashed var(--el-border-color);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.sandbox-textcol-hint {
+  width: 100%;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+  margin-bottom: 4px;
 }
 
 .mapping-header-origin {

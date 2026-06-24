@@ -117,14 +117,14 @@ public class LogDataRecordServiceImpl extends ServiceImpl<LogDataRecordMapper, L
                     continue;
                 }
 
-                switch (finalKey) {
+                switch (finalKey != null ? finalKey.toLowerCase() : "") {
                     case "depth": record.setDepth(val); break;
                     case "ac": record.setAc(val); break;
                     case "den": record.setDen(val); break;
                     case "gr": record.setGr(val); break;
                     case "rt": record.setRt(val); break;
                     case "sp": record.setSp(val); break;
-                    default: extraMap.put(finalKey, val); break;
+                    default: extraMap.put(originalColName, val); break;
                 }
             }
             if (!extraMap.isEmpty()) {

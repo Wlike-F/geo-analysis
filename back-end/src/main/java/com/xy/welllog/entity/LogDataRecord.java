@@ -21,7 +21,7 @@ public class LogDataRecord {
     private Map<String, Object> extraJson;
 
     // 文本预留列（岩性、地层名等分类字段）
-    // select=false: 不参与自动 SELECT（兼容未执行 ALTER TABLE 的旧数据库）
+    // select=false: 兼容未执行 ALTER TABLE 添加列的旧数据库
     @TableField(select = false)
     private String textCol1;
     @TableField(select = false)

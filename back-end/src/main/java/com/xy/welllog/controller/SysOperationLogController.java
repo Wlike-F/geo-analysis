@@ -72,6 +72,20 @@ public class SysOperationLogController {
         return null;
     }
 
+    private String getUsername(HttpServletRequest request) {
+        String header = request.getHeader("Authorization");
+        if (StringUtils.hasText(header) && header.startsWith("Bearer "))
+            return jwtUtils.getUsernameFromToken(header.substring(7));
+        return null;
+    }
+    private boolean isAdmin(String username) {
+        if (username == null) return false;
+        LambdaQueryWrapper<SysUser> w = new LambdaQueryWrapper<>();
+        w.eq(SysUser::getUsername, username);
+        SysUser user = sysUserService.getOne(w);
+        return user != null && "admin".equals(user.getRole());
+    }
+
     @GetMapping("/login")
     public Result<Page<SysOperationLog>> getLoginLogs(
             @RequestParam(defaultValue = "1") Integer current,
@@ -172,6 +186,8 @@ public class SysOperationLogController {
     public Result<Map<String, Object>> cleanup(HttpServletRequest request) {
         Long userId = getUserId(request);
         if (userId == null) return Result.failed("用户未登录");
+        String username = getUsername(request);
+        if (!isAdmin(username)) return Result.failed("无管理员权限");
 
         Map<String, Object> result = new ConcurrentHashMap<>();
 
@@ -210,19 +226,25 @@ public class SysOperationLogController {
             result.put("deletedTokens", delTokens.get(300, TimeUnit.SECONDS));
             delFiles.get(300, TimeUnit.SECONDS);
         } catch (Exception e) {
-            result.putIfAbsent("error", e.getMessage());
+            String msg = e.getMessage();
+            if (msg == null) msg = e instanceof InterruptedException ? "操作被中断" : e.getClass().getSimpleName();
+            result.put("error", msg);
         }
 
         sysOperationLogService.recordLog("系统管理", "执行缓存清理", 0, 0L, userId);
         return Result.success(result, "缓存清理完成");
     }
 
-    /** 先 COUNT 再 DELETE：无数据则直接返回 0，跳过全表扫描 */
+    /** 分批 DELETE：无 COUNT 预扫，直接删，每批 50000 行，删完即停 */
     private int safeDelete(JdbcTemplate jt, String tableName, String countSql, String deleteSql) {
-        Integer count = jt.queryForObject(countSql, Integer.class);
-        if (count == null || count == 0) return 0;
-        log.info("[清理] {} 待删除 {} 条", tableName, count);
-        return jt.update(deleteSql);
+        String batchSql = deleteSql + " LIMIT 50000";
+        int total = 0, batch;
+        do {
+            batch = jt.update(batchSql);
+            total += batch;
+        } while (batch >= 50000);
+        if (total > 0) log.info("[清理] {} 已删除 {} 条", tableName, total);
+        return total;
     }
 
     /**
@@ -235,9 +257,8 @@ public class SysOperationLogController {
             HttpServletRequest request) {
 
         Long userId = getUserId(request);
-        if (userId == null) {
-            return Result.failed("用户未登录");
-        }
+        if (userId == null) return Result.failed("用户未登录");
+        if (!isAdmin(getUsername(request))) return Result.failed("无管理员权限");
 
         List<InMemoryLogAppender.LogEntry> entries = inMemoryLogAppender.getEntries(level, Math.min(lines, 500));
         return Result.success(entries);

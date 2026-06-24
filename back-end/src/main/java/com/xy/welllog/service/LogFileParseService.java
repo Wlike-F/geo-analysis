@@ -152,7 +152,7 @@ public class LogFileParseService {
         List<SysColumnMapping> rules = mappingService.list();
         Map<String, Pattern> compiledRules = new HashMap<>();
         for (SysColumnMapping rule : rules) {
-            String standardName = rule.getStandardName().toUpperCase();
+            String standardName = rule.getStandardName();
             String standardKey = rule.getStandardKey();
             String alias = rule.getAliasList();
             StringBuilder regexBuilder = new StringBuilder();
@@ -333,7 +333,7 @@ public class LogFileParseService {
                 Charset charset = detectFileEncoding(file);
                 log.info("[解析] 编码检测结果: {}, 文件: {}", charset.name(), title);
                 long fileSize = file.length();
-                int numThreads = Math.min(Runtime.getRuntime().availableProcessors(), 8);
+                int numThreads = Math.min(Runtime.getRuntime().availableProcessors(), 4);
                 // 文件小于 10MB 不启用多线程
                 if (fileSize < 10 * 1024 * 1024 || numThreads < 2) {
                     try (BufferedReader br = new BufferedReader(
@@ -342,7 +342,7 @@ public class LogFileParseService {
                         while ((line = br.readLine()) != null) {
                             line = line.trim().replace("\uFEFF", "");
                             if (line.isEmpty()) continue;
-                            if (isCsv) line = line.replaceAll(",", " ");
+                            if (isCsv) line = line.replace(",", " ");
                             processParsedLine(line, fileId, columns, compiledRules,
                                     totalRows, lineNum, dataStarted, batch, textColumns);
                         }
@@ -370,8 +370,10 @@ public class LogFileParseService {
 
                     pool.shutdown();
                     for (Future<?> f : futures) {
-                        try { f.get(30, TimeUnit.MINUTES); } catch (Exception e) {
-                            log.error("[解析] 线程异常", e);
+                        try { f.get(30, TimeUnit.MINUTES); } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            log.error("[解析] 线程被中断", e);
+                        } catch (Exception e) {
                         }
                     }
                     totalRows[0] = atomicTotalRows.get();
@@ -380,6 +382,18 @@ public class LogFileParseService {
 
             fileInfo.setTotalRows(totalRows[0]);
             fileInfo.setColumnsJson(JSONUtil.toJsonStr(columns));
+            final Long statsFileId = fileId;
+            // 预计算核心列统计（异步，不阻塞解析完成）
+            CompletableFuture.runAsync(() -> {
+                String stats = computeColumnStats(statsFileId);
+                if (stats != null) {
+                    LogFileInfo fi = fileInfoService.getById(statsFileId);
+                    if (fi != null) {
+                        fi.setColumnStatsJson(stats);
+                        fileInfoService.updateById(fi);
+                    }
+                }
+            });
             fileInfo.setStatus(1); // 成功
             fileInfoService.updateById(fileInfo);
             log.info("[解析] 解析完成: {}, fileId={}, 共 {} 行有效数据", title, fileId, totalRows[0]);
@@ -492,6 +506,40 @@ public class LogFileParseService {
     /**
      * 编译字典映射规则为正则表达式（只查库一次）
      */
+    /**
+     * 解析完成后预计算核心列统计（MIN/MAX/有效数/无效数），存 JSON 供解析报告秒开
+     */
+    private String computeColumnStats(Long fileId) {
+        try {
+            String sentinel = "(col IS NOT NULL AND col != -9999 AND col != -999.25 AND col != -999)";
+            String[] cols = {"depth", "ac", "den", "gr", "sp", "rt"};
+            StringBuilder sb = new StringBuilder("SELECT ");
+            for (int i = 0; i < cols.length; i++) {
+                String c = cols[i], cond = sentinel.replace("col", c);
+                if (i > 0) sb.append(", ");
+                sb.append("MIN(CASE WHEN ").append(cond).append(" THEN ").append(c).append(" END) AS ").append(c).append("_min, ");
+                sb.append("MAX(CASE WHEN ").append(cond).append(" THEN ").append(c).append(" END) AS ").append(c).append("_max, ");
+                sb.append("SUM(CASE WHEN ").append(cond).append(" THEN 1 ELSE 0 END) AS ").append(c).append("_valid, ");
+                sb.append("SUM(CASE WHEN ").append(cond).append(" THEN 0 ELSE 1 END) AS ").append(c).append("_invalid");
+            }
+            sb.append(" FROM log_data_records WHERE file_id = ?");
+            Map<String, Object> row = jdbcTemplate.queryForMap(sb.toString(), fileId);
+            Map<String, Object> stats = new LinkedHashMap<>();
+            for (String col : cols) {
+                Map<String, Object> s = new LinkedHashMap<>();
+                s.put("min", row.get(col + "_min"));
+                s.put("max", row.get(col + "_max"));
+                s.put("valid", row.get(col + "_valid"));
+                s.put("invalid", row.get(col + "_invalid"));
+                stats.put(col, s);
+            }
+            return JSONUtil.toJsonStr(stats);
+        } catch (Exception e) {
+            log.warn("[解析] 预计算列统计失败 fileId={}: {}", fileId, e.getMessage());
+            return null;
+        }
+    }
+
     private Map<String, Pattern> compileMappingRules() {
         List<SysColumnMapping> rules = mappingService.list();
         Map<String, Pattern> compiledRules = new HashMap<>();
@@ -510,7 +558,7 @@ public class LogFileParseService {
             }
             regexBuilder.append(")$");
 
-            compiledRules.put(ruleStr, Pattern.compile(regexBuilder.toString(), Pattern.CASE_INSENSITIVE));
+            compiledRules.put(rule.getStandardName(), Pattern.compile(regexBuilder.toString(), Pattern.CASE_INSENSITIVE));
         }
         return compiledRules;
     }

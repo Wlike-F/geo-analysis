@@ -9,7 +9,7 @@ import java.util.UUID;
  */
 public class CommonUtils {
 
-    public static final String DEFAULT_DATETIME_PATTERN = "yyyy-MM-Object HH:mm:ss";
+    public static final String DEFAULT_DATETIME_PATTERN = "yyyy-MM-dd HH:mm:ss";
 
     /**
      * 获取当前时间的字符串表示 (yyyy-MM-dd HH:mm:ss)

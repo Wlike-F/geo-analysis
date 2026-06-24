@@ -6,6 +6,7 @@ import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.AppenderBase;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -37,6 +38,14 @@ public class InMemoryLogAppender extends AppenderBase<ILoggingEvent> {
         this.start();
         rootLogger.addAppender(this);
         log.info("InMemoryLogAppender 已注册，环形缓冲容量: {} 条", MAX_ENTRIES);
+    }
+
+    @PreDestroy
+    public void destroy() {
+        LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
+        Logger rootLogger = context.getLogger(Logger.ROOT_LOGGER_NAME);
+        rootLogger.detachAppender(this);
+        this.stop();
     }
 
     @Override

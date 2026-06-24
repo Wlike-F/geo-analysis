@@ -49,7 +49,7 @@ public class SysColumnMappingController {
                 }
             }
         }
-        return 1L;
+        return null;
     }
 
     private String getMappingLabel(SysColumnMapping mapping) {
@@ -122,6 +122,7 @@ public class SysColumnMappingController {
 
     @PostMapping("/batchDelete")
     public Result<?> batchDelete(@RequestBody Long[] ids, HttpServletRequest request) {
+        if (ids == null || ids.length == 0) return Result.failed("请选择要删除的记录");
         List<SysColumnMapping> list = sysColumnMappingService.listByIds(Arrays.asList(ids));
         boolean hasCore = list.stream().anyMatch(item -> item.getIsCore() != null && item.getIsCore() == 1);
         if (hasCore) {

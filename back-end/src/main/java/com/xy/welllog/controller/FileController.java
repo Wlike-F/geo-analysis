@@ -22,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.util.StringUtils;
 
@@ -107,17 +108,13 @@ public class FileController {
                 }
             }
         }
-        return 1L;
+        return null;
     }
 
-    /**
-     * P2 Sandbox: 上传文件进行预解析，不直接入库
-     */
     @PostMapping("/preview")
     public Result<PreviewResultDTO> previewFile(@RequestParam("file") MultipartFile file, HttpServletRequest request) {
-        if (file.isEmpty()) {
-            return Result.failed("文件内容为空");
-        }
+        if (file.isEmpty()) return Result.failed("文件内容为空");
+        if (getUserId(request) == null) return Result.failed("请先登录");
         try {
             String uploadDir = getUploadDir();
             if (uploadDir == null) {
@@ -148,6 +145,8 @@ public class FileController {
      */
     @PostMapping("/confirm")
     public Result<String> confirmUpload(@RequestBody ConfirmUploadDTO confirmDto, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return Result.failed("请先登录");
         File file = new File(confirmDto.getTempFilePath());
         if (!file.exists()) {
             return Result.failed("临时文件已过期或不存在");
@@ -184,8 +183,15 @@ public class FileController {
     /**
      * 读取服务器某个绝对路径下所有的 TXT 测井文件并批量入库（自动应用建议映射）
      */
-    @GetMapping("/scan")
+    @PostMapping("/scan")
     public Result<String> scanServerPath(@RequestParam("path") String path, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return Result.failed("请先登录");
+        // 路径白名单校验
+        String uploadDir = getUploadDir();
+        if (uploadDir == null || !path.startsWith(uploadDir.replace('\\', '/'))) {
+            return Result.failed("扫描路径不在允许范围内");
+        }
         if (!FileUtil.isDirectory(path)) {
             return Result.failed("该路径不存在或不是一个目录");
         }
@@ -379,7 +385,12 @@ public class FileController {
             columns = cn.hutool.json.JSONUtil.toList(fileInfo.getColumnsJson(), String.class);
         }
 
-        // --- 用 SQL 聚合代替全量加载 ---
+        // 优先使用解析时预计算的统计缓存，避免实时聚合（50万行 44s → 0s）
+        if (StringUtils.hasText(fileInfo.getColumnStatsJson())) {
+            return buildReportFromCache(fileInfo, columns);
+        }
+
+        // ====== 以下为无缓存时的实时聚合（兼容老数据） ======
 
         // 总记录数 + 脏数据并行查询
         CompletableFuture<Long> recordCountF = CompletableFuture.supplyAsync(() ->
@@ -472,6 +483,48 @@ public class FileController {
     }
 
     /** 将列名映射到核心数据库列名，非核心列返回 null */
+    /** 从预计算缓存构建解析报告（秒开） */
+    private Result<Map<String, Object>> buildReportFromCache(LogFileInfo fileInfo, List<String> columns) {
+        Map<String, Object> statsMap = JSONUtil.toBean(fileInfo.getColumnStatsJson(), Map.class);
+        Map<String, ColumnReport> columnReports = new LinkedHashMap<>();
+        double depthMin = Double.NaN, depthMax = Double.NaN;
+        long totalInvalid = 0;
+
+        for (String col : columns) {
+            if (isWellNameColumn(col)) continue;
+            ColumnReport r = new ColumnReport(col);
+            String mappedCol = getMappedCoreColumn(col);
+            if (mappedCol != null) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> s = (Map<String, Object>) statsMap.get(mappedCol);
+                if (s != null) {
+                    r.validCount = toLong(s.get("valid"));
+                    r.invalidCount = toLong(s.get("invalid"));
+                    r.min = toDouble(s.get("min"));
+                    r.max = toDouble(s.get("max"));
+                    totalInvalid += r.invalidCount;
+                    if (isDepthColumn(col)) { depthMin = r.min; depthMax = r.max; }
+                }
+            }
+            columnReports.put(col, r);
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("fileId", fileInfo.getId());
+        result.put("fileName", fileInfo.getFileName());
+        result.put("status", fileInfo.getStatus());
+        result.put("totalRows", fileInfo.getTotalRows());
+        result.put("recordCount", fileInfo.getTotalRows() != null ? fileInfo.getTotalRows().longValue() : 0L);
+        result.put("columns", columns);
+        result.put("columnCount", columns.size());
+        result.put("depthMin", depthMin);
+        result.put("depthMax", depthMax);
+        result.put("invalidValueCount", totalInvalid);
+        result.put("dirtyLineCount", countDirtyLines(fileInfo.getId()));
+        result.put("columnStats", new ArrayList<>(columnReports.values()));
+        return Result.success(result);
+    }
+
     private String getMappedCoreColumn(String colName) {
         if (colName == null) return null;
         String lower = colName.trim().toLowerCase();
@@ -633,6 +686,7 @@ public class FileController {
     }
 
     @PostMapping("/{id}/layers")
+    @Transactional(rollbackFor = Exception.class)
     public Result<String> saveLayers(@PathVariable Long id, @RequestBody List<WellLayer> layers, HttpServletRequest request) {
         Long userId = getUserId(request);
         LogFileInfo fileInfo = fileInfoService.getById(id);
@@ -761,8 +815,10 @@ public class FileController {
                 rows = parseTxtToRows(file);
             } else {
                 // Excel文件：用EasyExcel默认读取
-                rows = com.alibaba.excel.EasyExcel.read(file.getInputStream())
-                        .sheet().headRowNumber(0).doReadSync();
+                try (InputStream is = file.getInputStream()) {
+                    rows = com.alibaba.excel.EasyExcel.read(is)
+                            .sheet().headRowNumber(0).doReadSync();
+                }
             }
 
             if (rows == null || rows.isEmpty()) {

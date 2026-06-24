@@ -83,15 +83,15 @@
                 <el-button icon="Refresh" size="default" @click="loadPresets" :loading="presetLoading">刷新</el-button>
               </div>
 
-              <el-table :data="presetList" v-loading="presetLoading" border style="width: 100%;" size="default">
+              <el-table :data="presetList" v-loading="presetLoading" border style="width: 80%;" size="default">
                 <el-table-column type="index" label="序号" width="60" align="center" />
-                <el-table-column prop="name" label="预设名称" min-width="140" />
+                <el-table-column prop="name" label="预设名称" min-width="60" align = "center" />
                 <el-table-column prop="scope" label="适用范围" width="100" align="center">
                   <template #default="{ row }">
-                    <el-tag size="small" :type="row.scope === 'all' ? '' : 'warning'">{{ row.scope === 'all' ? '全局' : '当前文件' }}</el-tag>
+                    <el-tag size="small" :type="row.scope === 'all' ? '' : 'warning'">{{ row.scope === 'all' ? '全局' : '当前' }}</el-tag>
                   </template>
                 </el-table-column>
-                <el-table-column label="包含列" min-width="180">
+                <el-table-column label="包含列" min-width="80">
                   <template #default="{ row }">
                     <template v-if="row.columnsJson">
                       <el-tag v-for="col in parseJson(row.columnsJson, [])" :key="col" size="small" style="margin: 2px 4px 2px 0;">{{ col }}</el-tag>
@@ -99,8 +99,8 @@
                     <span v-else style="color: var(--el-text-color-placeholder);">—</span>
                   </template>
                 </el-table-column>
-                <el-table-column prop="updateTime" label="更新时间" width="170" align="center" />
-                <el-table-column label="操作" width="140" align="center">
+                <el-table-column prop="updateTime" label="更新时间" width="180" align="center" />
+                <el-table-column label="操作" width="120" align="center">
                   <template #default="{ row }">
                     <el-button type="primary" link size="small" @click="openPresetDialog(row)">编辑</el-button>
                     <el-button type="danger" link size="small" @click="handleDeletePreset(row)">删除</el-button>

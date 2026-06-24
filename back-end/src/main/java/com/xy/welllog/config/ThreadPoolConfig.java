@@ -25,7 +25,8 @@ public class ThreadPoolConfig {
         executor.setThreadNamePrefix("log-parse-");
         // 拒绝策略：由调用线程（提交任务的线程）处理该任务
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
-        // 初始化
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(60);
         executor.initialize();
         return executor;
     }

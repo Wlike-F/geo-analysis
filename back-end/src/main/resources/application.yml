@@ -15,8 +15,8 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       minimum-idle: 2
-      maximum-pool-size: 8
-      connection-timeout: 5000
+      maximum-pool-size: 20
+      connection-timeout: 10000
       idle-timeout: 600000
       pool-name: WellLogPool
   data:

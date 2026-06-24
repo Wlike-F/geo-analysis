@@ -59,6 +59,7 @@ CREATE TABLE IF NOT EXISTS `log_file_info` (
   `file_name` VARCHAR(255) NOT NULL COMMENT '文件原始名称',
   `columns_json` TEXT COMMENT '动态列名配置，JSON数组格式保存',
   `text_columns_json` TEXT COMMENT '文本列配置，JSON对象{原始列名:text_col_N}',
+  `column_stats_json` TEXT COMMENT '解析时预计算的核心列统计JSON，用于解析报告秒开',
   `total_rows` INT DEFAULT 0 COMMENT '总解析行数',
   `status` TINYINT DEFAULT 1 COMMENT '1:正常 2:逻辑删除，待定时任务物理清除',
   `create_time` DATETIME DEFAULT CURRENT_TIMESTAMP,

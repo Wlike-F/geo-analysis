@@ -38,6 +38,9 @@ public class SysUserServiceImpl extends ServiceImpl<SysUserMapper, SysUser> impl
 
     @Override
     public void register(RegisterDTO registerDTO) {
+        if (registerDTO.getPassword() == null || registerDTO.getPassword().isBlank()) {
+            throw new RuntimeException("密码不能为空");
+        }
         LambdaQueryWrapper<SysUser> queryWrapper = new LambdaQueryWrapper<>();
         queryWrapper.eq(SysUser::getUsername, registerDTO.getUsername());
         long count = this.count(queryWrapper);

@@ -12,6 +12,7 @@ public class LogFileInfo {
     private String fileName;
     private String columnsJson;
     private String textColumnsJson;  // 文本列配置 {"岩性":"text_col_1", "地层":"text_col_2"}
+    private String columnStatsJson;  // 解析时预计算的核心列统计 {"depth":{"min":...,"max":...,"valid":...,"invalid":...},...}
     private Integer totalRows;
     private Integer status;
     private Date createTime;
