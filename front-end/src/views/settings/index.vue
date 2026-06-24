@@ -216,6 +216,7 @@
               </el-select>
               <el-button type="primary" icon="Refresh" @click="fetchRuntimeLogs" :loading="runtimeLoading">刷新日志</el-button>
               <el-button type="danger" icon="Delete" plain @click="runtimeLogs = []">清空显示</el-button>
+              <el-button type="warning" icon="SwitchButton" plain @click="handleRestart" :loading="restartLoading">重启后端</el-button>
               <span class="runtime-count">共 {{ runtimeLogs.length }} 条</span>
             </div>
 
@@ -580,6 +581,28 @@ const handleCleanup = async () => {
     ElMessage.error('缓存清理失败')
   } finally {
     cleanupLoading.value = false
+  }
+}
+
+// --- 重启后端 ---
+const restartLoading = ref(false)
+
+const handleRestart = async () => {
+  try {
+    await ElMessageBox.confirm(
+      '重启过程中服务将中断约 5-10 秒，当前操作可能会丢失，确定重启吗？',
+      '重启后端', { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
+    )
+  } catch { return }
+  restartLoading.value = true
+  try {
+    const res = await request.post('/sys/restart')
+    ElMessage.success(res?.msg || '正在重启后端，请等待 5-10 秒后刷新页面')
+  } catch {
+    // 请求可能因服务关闭而失败，这是正常的
+    ElMessage.success('重启请求已发送，请等待 10 秒后刷新页面')
+  } finally {
+    restartLoading.value = false
   }
 }
 
@@ -972,6 +995,9 @@ const handleDeletePreset = async (row) => {
   padding: 14px 16px;
   background: var(--el-fill-color-lighter, #f5f7fa);
   border-radius: 8px;
+}
+.runtime-toolbar .el-button + .el-button {
+  margin-left: 0;
 }
 
 .runtime-count {

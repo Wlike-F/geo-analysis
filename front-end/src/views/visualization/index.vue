@@ -143,7 +143,7 @@
                 </el-button>
               </el-col>
               <el-col :span="12">
-                <el-button class="full-width custom-btn-emerald" :disabled="anomalySegments.length === 0" @click="exportAnomalyData">
+                <el-button class="full-width custom-btn-emerald" :disabled="anomalySegments.length === 0 || exporting" :loading="exporting" @click="exportAnomalyData">
                   <el-icon><Download /></el-icon> 导出 CSV
                 </el-button>
               </el-col>
@@ -258,6 +258,7 @@ const anomalyConditions = ref([{ channel: '', operator: '>', threshold: 0 }])
 const minContinuousPoints = ref(1)
 const anomalySegments = ref([])
 const showAnomalyDialog = ref(false)
+const exporting = ref(false)
 
 // 折叠面板
 const sectionExpanded = reactive({ channels: false, stats: false, conditions: false })
@@ -549,6 +550,8 @@ const exportAnomalyData = () => {
     ElMessage.warning('暂无异常结果可导出')
     return
   }
+  exporting.value = true
+  try {
 
   let csvContent = '\uFEFF序号,顶界深度(m),底界深度(m),厚度(m)'
   selectedStatsChannels.value.forEach(col => {
@@ -571,10 +574,13 @@ const exportAnomalyData = () => {
   link.download = `异常测段分析结果_${selectedFile.value || '未知'}.csv`
   link.click()
   setTimeout(() => URL.revokeObjectURL(link.href), 100)
+  } finally { exporting.value = false }
 }
 
 const handleExport = () => {
   if (!chartInstance.value) return
+  exporting.value = true
+  try {
   const url = chartInstance.value.getDataURL({
     type: 'png',
     pixelRatio: 2,
@@ -584,6 +590,7 @@ const handleExport = () => {
   link.download = `测井多道异常标定_${selectedFile.value || '未知'}.png`
   link.href = url
   link.click()
+  } finally { exporting.value = false }
 }
 
 const initChart = () => {

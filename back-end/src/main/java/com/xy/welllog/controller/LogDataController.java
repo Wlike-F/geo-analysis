@@ -67,7 +67,7 @@ public class LogDataController {
     /** 每批导出行数（受限于 MybatisPlus 分页上限 10000） */
     private static final int EXPORT_BATCH_SIZE = 10000;
     /** 单次导出最大行数（xlsx 格式上限 1,048,576，留余量给表头） */
-    private static final int EXPORT_MAX_TOTAL = 1000000;
+    private static final int EXPORT_MAX_TOTAL = 500000;
 
     private Long getUserId(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
@@ -609,12 +609,15 @@ public class LogDataController {
                 head.add(Collections.singletonList("层位"));
             }
 
-            try (ExcelWriter excelWriter = EasyExcel.write(response.getOutputStream()).head(head).build()) {
-                WriteSheet writeSheet = EasyExcel.writerSheet("Filtered Data").build();
-                long totalWritten = streamWriteData(excelWriter, writeSheet, fileId, query, cols);
-                operationLogService.recordLog("报表导出", "筛选结果Excel导出", 1, totalWritten, getUserId(request));
-                log.info("[导出] Excel导出完成: fileId={}, {} 行", fileId, totalWritten);
-            }
+	            try (ExcelWriter excelWriter = EasyExcel.write(response.getOutputStream()).head(head).build()) {
+	                WriteSheet writeSheet = EasyExcel.writerSheet("Filtered Data").build();
+	                long totalWritten = streamWriteData(excelWriter, writeSheet, fileId, query, cols);
+	                operationLogService.recordLog("报表导出", "筛选结果Excel导出", 1, totalWritten, getUserId(request));
+	                log.info("[导出] Excel导出完成: fileId={}, {} 行", fileId, totalWritten);
+	                try { excelWriter.finish(); } catch (Exception ignored) {
+	                    log.warn("[导出] Excel流关闭失败（数据已写入）: fileId={}", fileId);
+	                }
+	            }
         } catch (Exception e) {
             log.error("[导出] Excel导出异常: fileId={}", fileId, e);
             response.setStatus(500);
@@ -709,10 +712,18 @@ public class LogDataController {
                     List<LogDataRecord> records = recordPage.getRecords();
                     if (records == null || records.isEmpty()) return Collections.emptyList();
 
+                    // 文本列值补充（select=false，MyBatis-Plus 不查 text_col_N）
+                    Map<Long, Map<String, String>> textVals = finalTextColMapping != null && !finalTextColMapping.isEmpty()
+                            ? loadTextColumnValues(records, finalTextColMapping) : Collections.emptyMap();
+
                     List<List<Object>> rows = new ArrayList<>(records.size());
                     for (LogDataRecord record : records) {
+                        Map<String, String> tv = textVals.getOrDefault(record.getId(), Collections.emptyMap());
                         List<Object> row = new ArrayList<>(finalCols.size() + (finalHasLayers ? 1 : 0));
-                        for (String colName : finalCols) row.add(readRecordValue(record, colName, finalTextColMapping));
+                        for (String colName : finalCols) {
+                            String tVal = tv.get(colName);
+                            row.add(tVal != null ? tVal : readRecordValue(record, colName, finalTextColMapping));
+                        }
                         if (finalHasLayers) row.add(matchLayerFromList(finalLayers, record.getDepth()));
                         rows.add(row);
                     }
@@ -727,12 +738,12 @@ public class LogDataController {
                     log.warn("[导出] 预取页失败: fileId={}", fileId, e); continue;
                 }
                 if (rows.isEmpty()) {
-                    currentPage = Integer.MAX_VALUE; break;
+                    return totalWritten;
                 }
                 writer.write(rows, sheet);
                 totalWritten += rows.size();
                 if (rows.size() < EXPORT_BATCH_SIZE) {
-                    currentPage = Integer.MAX_VALUE; break;
+                    return totalWritten;
                 }
             }
             currentPage += FETCH_AHEAD;

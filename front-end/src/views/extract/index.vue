@@ -56,8 +56,8 @@
         <el-button icon="Refresh" plain @click="clearAllFilters" :disabled="activeFilterCount === 0">清除条件</el-button>
       </div>
       <div class="toolbar-group">
-        <el-button type="success" icon="Document" plain @click="handleExportCurrent">导出当前</el-button>
-        <el-button type="success" icon="Files" plain @click="handleBatchExport">导出全部</el-button>
+	        <el-button type="success" icon="Document" plain @click="handleExportCurrent" :loading="exportLoading === 'current'" :disabled="exportLoading !== ''">导出当前</el-button>
+	        <el-button type="success" icon="Files" plain @click="handleBatchExport" :loading="exportLoading === 'all'" :disabled="exportLoading !== ''">导出全部</el-button>
         <el-button type="danger" icon="Delete" plain @click="closeAllTabs">清空已选</el-button>
       </div>
     </div>
@@ -1101,6 +1101,8 @@ const clearGlobalFilters = () => {
   ElMessage.success('所有筛选条件已清除')
 }
 
+const exportLoading = ref('')
+
 const exportToExcel = async (tabObj) => {
   if (!tabObj.fileId) {
     ElMessage.warning('当前没有任何数据归档信息可以导出')
@@ -1128,13 +1130,15 @@ const exportToExcel = async (tabObj) => {
 }
 
 // 导出当前激活页签的筛选结果（单文件 Excel）
-const handleExportCurrent = () => {
+const handleExportCurrent = async () => {
   const tab = currentTab.value
   if (!tab) {
     ElMessage.warning('请先选择一个数据页签再导出')
     return
   }
-  exportToExcel(tab)
+  exportLoading.value = 'current'
+  try { await exportToExcel(tab) }
+  finally { exportLoading.value = '' }
 }
 
 const handleBatchExport = async () => {
@@ -1142,7 +1146,7 @@ const handleBatchExport = async () => {
     ElMessage.warning('没有可导出的数据文件')
     return
   }
-
+  exportLoading.value = 'all'
   try {
     ElMessage.info('后端正流式组装并压缩导出数据，请耐心等待...')
     const queries = tabs.value.map(tab => ({
@@ -1163,6 +1167,8 @@ const handleBatchExport = async () => {
   } catch (error) {
     console.error(error)
     ElMessage.error('批量压缩导出失败，请重试')
+  } finally {
+    exportLoading.value = ''
   }
 }
 

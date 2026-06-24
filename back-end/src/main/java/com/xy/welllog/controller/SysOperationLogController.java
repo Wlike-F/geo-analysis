@@ -200,6 +200,10 @@ public class SysOperationLogController {
             safeDelete(jdbcTemplate, "log_dirty_data",
                 "SELECT COUNT(*) FROM log_dirty_data WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)",
                 "DELETE FROM log_dirty_data WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)"));
+        CompletableFuture<Integer> delLayers = CompletableFuture.supplyAsync(() ->
+            safeDelete(jdbcTemplate, "well_layer",
+                "SELECT COUNT(*) FROM well_layer WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)",
+                "DELETE FROM well_layer WHERE file_id IN (SELECT id FROM log_file_info WHERE status = 2)"));
         CompletableFuture<Integer> delLogs = CompletableFuture.supplyAsync(() ->
             safeDelete(jdbcTemplate, "sys_operation_log",
                 "SELECT COUNT(*) FROM sys_operation_log WHERE create_time < DATE_SUB(NOW(), INTERVAL 30 DAY)",
@@ -210,7 +214,7 @@ public class SysOperationLogController {
                 "DELETE FROM sys_refresh_token WHERE revoked = 1 OR expires_at < NOW()"));
 
         // 阶段2：等待子表数据清完后，删除文件元数据
-        CompletableFuture<Void> delFiles = CompletableFuture.allOf(delRecords, delDirty)
+        CompletableFuture<Void> delFiles = CompletableFuture.allOf(delRecords, delDirty, delLayers)
             .thenRunAsync(() -> {
                 int cnt = safeDelete(jdbcTemplate, "log_file_info",
                     "SELECT COUNT(*) FROM log_file_info WHERE status = 2",
@@ -222,6 +226,7 @@ public class SysOperationLogController {
         try {
             result.put("deletedRecords", delRecords.get(300, TimeUnit.SECONDS));
             result.put("deletedDirty", delDirty.get(300, TimeUnit.SECONDS));
+            result.put("deletedLayers", delLayers.get(300, TimeUnit.SECONDS));
             result.put("deletedLogs", delLogs.get(300, TimeUnit.SECONDS));
             result.put("deletedTokens", delTokens.get(300, TimeUnit.SECONDS));
             delFiles.get(300, TimeUnit.SECONDS);
@@ -262,5 +267,31 @@ public class SysOperationLogController {
 
         List<InMemoryLogAppender.LogEntry> entries = inMemoryLogAppender.getEntries(level, Math.min(lines, 500));
         return Result.success(entries);
+    }
+
+    /**
+     * 重启后端服务（仅管理员）
+     * 原理：启动新 JVM 进程，当前进程延迟 1 秒后优雅退出
+     */
+    @PostMapping("/restart")
+    public Result<String> restart(HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return Result.failed("用户未登录");
+        if (!isAdmin(getUsername(request))) return Result.failed("无管理员权限");
+
+        new Thread(() -> {
+            try {
+                Thread.sleep(1500);
+                String javaHome = System.getProperty("java.home");
+                String javaExe = javaHome + java.io.File.separator + "bin" + java.io.File.separator + "java";
+                String jarPath = this.getClass().getProtectionDomain().getCodeSource().getLocation().toURI().getPath();
+                new ProcessBuilder(javaExe, "-jar", jarPath).inheritIO().start();
+                System.exit(0);
+            } catch (Exception e) {
+                log.error("重启失败", e);
+            }
+        }, "app-restarter").start();
+
+        return Result.success("正在重启后端，请等待 5-10 秒后刷新页面");
     }
 }
