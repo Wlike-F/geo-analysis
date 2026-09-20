@@ -163,6 +163,58 @@
           </div>
         </el-tab-pane>
 
+        <el-tab-pane label="存储设置" name="storage" icon="FolderOpened">
+          <div class="pane-content">
+            <div class="pane-header">
+              <h3 class="pane-title">上传目录设置</h3>
+              <p class="pane-subtitle">管理系统上传文件的服务器目录，按顺序使用第一个可写的目录；全部留空则使用系统默认目录。</p>
+            </div>
+            <el-divider />
+
+            <div style="max-width: 820px;" v-loading="dirsLoading">
+              <!-- ① 当前生效 -->
+              <el-alert v-if="activeDir" :type="usingDefault ? 'info' : 'success'" :closable="false" show-icon style="margin-bottom: 18px;"
+                :title="usingDefault ? `当前使用【系统默认】目录：${activeDir}` : `当前使用【我的配置】目录：${activeDir}`" />
+              <el-alert v-else type="error" :closable="false" show-icon style="margin-bottom: 18px;"
+                title="当前没有任何可写的上传目录，上传将失败！请检查目录是否存在且有写入权限。" />
+
+              <!-- ② 我的上传目录 -->
+              <div class="pref-section-title">我的上传目录（按优先级排序）</div>
+              <p class="pref-section-desc">上传时从上到下取第一个“可写”的目录。路径为本程序所在机器上的绝对目录（不是浏览器所在电脑）。</p>
+              <el-empty v-if="uploadDirs.length === 0" description="未配置，当前回退到系统默认目录" :image-size="60" />
+              <div v-for="(dir, idx) in uploadDirs" :key="idx"
+                   style="display: flex; gap: 8px; align-items: center; margin-bottom: 10px;">
+                <el-input v-model="uploadDirs[idx]" placeholder="请输入服务器绝对路径，如 D:\project-upload" clearable style="flex: 1;" />
+                <el-tag v-if="isActiveMyDir(dir)" type="success" size="small" effect="dark">使用中</el-tag>
+                <el-tag :type="dirStatusType(dir)" size="small">{{ dirStatusText(dir) }}</el-tag>
+                <el-button-group>
+                  <el-button icon="ArrowUp" :disabled="idx === 0" @click="moveUploadDir(idx, -1)" />
+                  <el-button icon="ArrowDown" :disabled="idx === uploadDirs.length - 1" @click="moveUploadDir(idx, 1)" />
+                </el-button-group>
+                <el-button type="danger" plain icon="Delete" @click="removeUploadDir(idx)" />
+              </div>
+              <div style="margin: 12px 0 6px; display: flex; gap: 12px;">
+                <el-button icon="Plus" @click="addUploadDir">添加目录</el-button>
+                <el-button icon="MagicStick" :disabled="defaultDirs.length === 0" @click="fillFromDefaults">用默认填充</el-button>
+                <el-button type="primary" icon="Check" :loading="storageSaving" @click="saveUploadDirs">保存上传目录</el-button>
+              </div>
+
+              <el-divider border-style="dashed" />
+
+              <!-- ③ 系统默认目录 -->
+              <div class="pref-section-title">系统默认目录（只读）</div>
+              <p class="pref-section-desc">来自服务端配置（application.yml）。当“我的上传目录”为空或全部不可用时回退到这里。</p>
+              <div v-for="dir in defaultDirs" :key="dir"
+                   style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+                <el-input :model-value="dir" readonly style="flex: 1;" />
+                <el-tag v-if="dir === activeDir && usingDefault" type="success" size="small" effect="dark">使用中</el-tag>
+                <el-tag :type="dirStatusType(dir)" size="small">{{ dirStatusText(dir) }}</el-tag>
+              </div>
+              <el-empty v-if="defaultDirs.length === 0" description="服务端未配置默认目录" :image-size="50" />
+            </div>
+          </div>
+        </el-tab-pane>
+
         <el-tab-pane label="操作日志" name="oplog" icon="Document">
           <div class="pane-content">
             <div class="pane-header">
@@ -216,7 +268,6 @@
               </el-select>
               <el-button type="primary" icon="Refresh" @click="fetchRuntimeLogs" :loading="runtimeLoading">刷新日志</el-button>
               <el-button type="danger" icon="Delete" plain @click="runtimeLogs = []">清空显示</el-button>
-              <el-button type="warning" icon="SwitchButton" plain @click="handleRestart" :loading="restartLoading">重启后端</el-button>
               <span class="runtime-count">共 {{ runtimeLogs.length }} 条</span>
             </div>
 
@@ -356,12 +407,13 @@ import { reactive, ref, watch, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { logout as logoutApi } from '@/api/auth'
-import { getLoginLogs, getAllLogs, getStorageStats, cleanupCache, getRuntimeLogs } from '@/api/log'
-import { updateProfile, updatePwd } from '@/api/user'
+import { getLoginLogs, getAllLogs, getStorageStats, cleanupCache, getCleanupStatus, getRuntimeLogs } from '@/api/log'
+import { updateProfile, updatePwd, updateSettings } from '@/api/user'
 import { useUserStore } from '@/store/user'
 import { getRefreshToken } from '@/utils/token'
 import { getAllColumnMappings } from '@/api/columnMapping'
 import { getDefaultColumns, saveDefaultColumns, listPresets, savePreset, deletePreset } from '@/api/filterPreset'
+import { getUploadDirsStatus } from '@/api/file'
 
 const router = useRouter()
 const userStore = useUserStore()
@@ -409,6 +461,72 @@ const saveInfo = async () => {
 
 const goToProfile = () => {
   activeTab.value = 'profile'
+}
+
+// ==================== 存储设置：上传目录 ====================
+const uploadDirs = ref([])        // 我的配置（可编辑）
+const defaultDirs = ref([])       // 系统默认（只读）
+const activeDir = ref('')         // 当前生效目录
+const usingDefault = ref(false)   // 生效目录是否来自默认
+const writableMap = ref({})       // 目录 -> 是否可写
+const storageSaving = ref(false)
+const dirsLoading = ref(false)
+
+const loadUploadDirs = async () => {
+  dirsLoading.value = true
+  try {
+    const res = await getUploadDirsStatus()
+    uploadDirs.value = Array.isArray(res?.configured) ? res.configured.slice() : []
+    defaultDirs.value = Array.isArray(res?.defaults) ? res.defaults.slice() : []
+    activeDir.value = res?.active || ''
+    usingDefault.value = !!res?.usingDefault
+    writableMap.value = res?.writable || {}
+  } catch (e) {
+    console.error(e)
+  } finally {
+    dirsLoading.value = false
+  }
+}
+
+const addUploadDir = () => uploadDirs.value.push('')
+const removeUploadDir = (idx) => uploadDirs.value.splice(idx, 1)
+const moveUploadDir = (idx, delta) => {
+  const target = idx + delta
+  if (target < 0 || target >= uploadDirs.value.length) return
+  const arr = uploadDirs.value
+  ;[arr[idx], arr[target]] = [arr[target], arr[idx]]
+}
+const fillFromDefaults = () => { uploadDirs.value = defaultDirs.value.slice() }
+
+const isActiveMyDir = (dir) => !!dir && !usingDefault.value && dir === activeDir.value
+const dirStatusType = (dir) => {
+  if (!dir) return 'info'
+  if (!(dir in writableMap.value)) return 'warning'
+  return writableMap.value[dir] ? 'success' : 'danger'
+}
+const dirStatusText = (dir) => {
+  if (!dir) return '空'
+  if (!(dir in writableMap.value)) return '待保存'
+  return writableMap.value[dir] ? '✓ 可写' : '✗ 不可用'
+}
+
+const saveUploadDirs = async () => {
+  const cleaned = uploadDirs.value.map(s => (s || '').trim()).filter(Boolean)
+  storageSaving.value = true
+  try {
+    // 合并写入 sysSettings，保留其它配置键
+    let obj = {}
+    try { obj = userStore.userInfo?.sysSettings ? JSON.parse(userStore.userInfo.sysSettings) : {} } catch (e) { obj = {} }
+    obj.uploadDirs = cleaned
+    await updateSettings({ sysSettings: JSON.stringify(obj) })
+    ElMessage.success('上传目录已保存')
+    await userStore.fetchUserInfo()
+    await loadUploadDirs()
+  } catch (error) {
+    console.error(error)
+  } finally {
+    storageSaving.value = false
+  }
 }
 
 const pwdDialogVisible = ref(false)
@@ -551,8 +669,63 @@ const formatNumber = (num) => {
   return Number(num).toLocaleString()
 }
 
-// --- 清除缓存 ---
+// --- 清除缓存（异步：接口秒回，后台删除，前端轮询状态） ---
 const cleanupLoading = ref(false)
+let cleanupPollTimer = null
+let cleanupPollErrors = 0
+let cleanupStartedAt = 0
+
+const stopCleanupPoll = () => {
+  if (cleanupPollTimer) {
+    clearInterval(cleanupPollTimer)
+    cleanupPollTimer = null
+  }
+}
+
+const renderCleanupResult = (res) => {
+  const parts = []
+  if (res.deletedFiles > 0) parts.push(`${res.deletedFiles} 个文件`)
+  if (res.deletedRecords > 0) parts.push(`${Number(res.deletedRecords).toLocaleString()} 条明细`)
+  if (res.deletedDirty > 0) parts.push(`${Number(res.deletedDirty).toLocaleString()} 条脏数据`)
+  if (res.deletedLogs > 0) parts.push(`${res.deletedLogs} 条日志`)
+  if (res.deletedTokens > 0) parts.push(`${res.deletedTokens} 个令牌`)
+  if (res.error) {
+    ElMessage.error(`清理过程出错：${res.error}`)
+  } else if (parts.length > 0) {
+    ElMessage.success(`清理完成：${parts.join('、')}`)
+  } else {
+    ElMessage.info('当前无需清理的缓存数据')
+  }
+}
+
+const startCleanupPoll = () => {
+  stopCleanupPoll()
+  cleanupPollErrors = 0
+  cleanupPollTimer = setInterval(async () => {
+    // 兜底：后台任务最长约 30 分钟，超时或连续失败则停止轮询
+    if (Date.now() - cleanupStartedAt > 35 * 60 * 1000) {
+      stopCleanupPoll()
+      cleanupLoading.value = false
+      ElMessage.warning('清理仍在后台进行，可稍后刷新查看结果')
+      return
+    }
+    try {
+      const st = await getCleanupStatus()
+      cleanupPollErrors = 0
+      if (st && st.status === 'DONE') {
+        stopCleanupPoll()
+        cleanupLoading.value = false
+        renderCleanupResult(st)
+      }
+    } catch (e) {
+      if (++cleanupPollErrors >= 5) {
+        stopCleanupPoll()
+        cleanupLoading.value = false
+        ElMessage.error('无法获取清理进度，请稍后刷新查看')
+      }
+    }
+  }, 2000)
+}
 
 const handleCleanup = async () => {
   try {
@@ -566,48 +739,28 @@ const handleCleanup = async () => {
   }
 
   cleanupLoading.value = true
+  cleanupStartedAt = Date.now()
   try {
     const res = await cleanupCache()
-    if (res) {
-      const parts = []
-      if (res.deletedFiles > 0) parts.push(`${res.deletedFiles} 个文件`)
-      if (res.deletedRecords > 0) parts.push(`${res.deletedRecords.toLocaleString()} 条明细`)
-      if (res.deletedDirty > 0) parts.push(`${res.deletedDirty.toLocaleString()} 条脏数据`)
-      if (res.deletedLogs > 0) parts.push(`${res.deletedLogs} 条日志`)
-      if (res.deletedTokens > 0) parts.push(`${res.deletedTokens} 个令牌`)
-      ElMessage.success(parts.length > 0 ? `清理完成：${parts.join('、')}` : '当前无需清理的缓存数据')
+    if (res && res.status === 'DONE') {
+      // 极小数据量时后台可能已完成（当前后端总是先回 RUNNING，保留兼容分支）
+      cleanupLoading.value = false
+      renderCleanupResult(res)
+    } else {
+      ElMessage.info('清理任务已启动，正在后台处理，请稍候…')
+      startCleanupPoll()
     }
   } catch (error) {
-    ElMessage.error('缓存清理失败')
-  } finally {
     cleanupLoading.value = false
-  }
-}
-
-// --- 重启后端 ---
-const restartLoading = ref(false)
-
-const handleRestart = async () => {
-  try {
-    await ElMessageBox.confirm(
-      '重启过程中服务将中断约 5-10 秒，当前操作可能会丢失，确定重启吗？',
-      '重启后端', { confirmButtonText: '确定', cancelButtonText: '取消', type: 'warning' }
-    )
-  } catch { return }
-  restartLoading.value = true
-  try {
-    const res = await request.post('/sys/restart')
-    ElMessage.success(res?.msg || '正在重启后端，请等待 5-10 秒后刷新页面')
-  } catch {
-    // 请求可能因服务关闭而失败，这是正常的
-    ElMessage.success('重启请求已发送，请等待 10 秒后刷新页面')
-  } finally {
-    restartLoading.value = false
+    ElMessage.error(error?.message || '缓存清理失败')
   }
 }
 
 // 进入操作日志 tab 时自动加载
 watch(activeTab, (val) => {
+  if (val === 'storage') {
+    loadUploadDirs()
+  }
   if (val === 'oplog' && opLogData.value.length === 0) {
     fetchOpLogs()
   }
@@ -626,6 +779,7 @@ watch(activeTab, (val) => {
 
 onUnmounted(() => {
   stopRuntimePolling()
+  stopCleanupPoll()
 })
 
 // --- 运行日志 ---
@@ -754,10 +908,12 @@ const openPresetDialog = (row) => {
     presetForm.scope = row.scope || 'all'
     presetColumnList.value = parseJson(row.columnsJson, [])
     const filters = parseJson(row.filtersJson, {})
-    // 先清空再填充
+    // 加载时过滤空条件，兼容旧预设数据
     Object.keys(presetFilters).forEach(k => delete presetFilters[k])
-    Object.keys(filters).forEach(k => {
-      presetFilters[k] = filters[k] || { min: '', max: '' }
+    Object.entries(filters).forEach(([k, v]) => {
+      if (v && (v.min !== '' && v.min != null) || (v.max !== '' && v.max != null)) {
+        presetFilters[k] = v
+      }
     })
   } else {
     presetForm.id = null
@@ -784,12 +940,17 @@ const handleSavePreset = async () => {
   }
   presetSaving.value = true
   try {
+    // 只保留有效条件（有 min 或 max 值）
+    const cleanFilters = {}
+    Object.entries(presetFilters).forEach(([col, r]) => {
+      if ((r.min !== '' && r.min != null) || (r.max !== '' && r.max != null)) cleanFilters[col] = r
+    })
     const payload = {
       id: presetForm.id,
       name: presetForm.name.trim(),
       scope: presetForm.scope,
       columnsJson: JSON.stringify(presetColumnList.value),
-      filtersJson: JSON.stringify(presetFilters),
+      filtersJson: JSON.stringify(cleanFilters),
       textFiltersJson: null
     }
     await savePreset(payload)

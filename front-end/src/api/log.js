@@ -30,6 +30,13 @@ export function cleanupCache() {
   })
 }
 
+export function getCleanupStatus() {
+  return request({
+    url: '/sys/log/cleanup/status',
+    method: 'get'
+  })
+}
+
 export function getRuntimeLogs(params) {
   return request({
     url: '/sys/log/runtime',

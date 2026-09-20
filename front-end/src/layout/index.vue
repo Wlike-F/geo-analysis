@@ -95,7 +95,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useUserStore } from '@/store/user'
@@ -108,7 +108,19 @@ const isCollapse = ref(false)
 
 onMounted(() => {
   userStore.fetchUserInfo()
+  window.addEventListener('keydown', onKeydown)
 })
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKeydown)
+})
+
+const onKeydown = (e) => {
+  if (e.ctrlKey && e.key === 'r') {
+    e.preventDefault()
+    window.dispatchEvent(new CustomEvent('app:refresh'))
+  }
+}
 
 const toggleSidebar = () => {
   isCollapse.value = !isCollapse.value

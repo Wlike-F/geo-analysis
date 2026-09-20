@@ -61,7 +61,7 @@
               <el-tag v-else type="info">未知</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="380" fixed="right" align="center">
+          <el-table-column label="操作" width="470" fixed="right" align="center">
             <template #default="{ row }">
               <el-button size="small" type="success" link icon="DocumentChecked"
                 :disabled="row.status !== 1"
@@ -78,6 +78,7 @@
                 {{ textColBackfilling[row.id] ? '回填中' : '文本列' }}
               </el-button>
               <el-button size="small" type="danger" link icon="Delete" :disabled="row.status === 0" @click="handleDelete(row)">删除</el-button>
+              <el-button size="small" type="warning" link icon="Refresh" @click="handleRepairStatus(row)">修正状态</el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -402,7 +403,7 @@
 import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
-import { clearFiles, deleteFile, getFileParseReport, getFileLayers, saveFileLayers, deleteFileLayers, copyLayersToFiles, importLayersFromExcel } from '@/api/file'
+import { clearFiles, deleteFile, getFileParseReport, getFileLayers, saveFileLayers, deleteFileLayers, copyLayersToFiles, importLayersFromExcel, repairFileStatus } from '@/api/file'
 import { getAllColumnMappings, addColumnMapping } from '@/api/columnMapping'
 import { Delete, DocumentChecked, FolderOpened, Loading, Plus, Search, Upload, View, Menu } from '@element-plus/icons-vue'
 
@@ -897,11 +898,19 @@ const confirmScan = async () => {
   }
   scanning.value = true
   try {
-    await request.post('/file/scan', null, { params: { path: scanPath.value } })
-    ElMessage.success('扫描完成')
+    const res = await request.post('/file/scan', null, { params: { path: scanPath.value } })
     scanDialogVisible.value = false
     pageParams.current = 1
     getTableData()
+    const found = res?.found ?? 0
+    const imported = res?.imported ?? 0
+    const skipped = res?.skipped ?? 0
+    const detail = `共发现 ${found} 个，导入 ${imported} 个，跳过 ${skipped} 个`
+    if (found > 0 && imported === 0) {
+      ElMessage.warning(`扫描完成：${detail}（无新增，可能均已存在或解析失败）`)
+    } else {
+      ElMessage.success(`扫描完成：${detail}`)
+    }
   } catch (error) {
     ElMessage.error(error.message || '扫描失败')
   } finally {
@@ -934,6 +943,23 @@ const handleDelete = (row) => {
       getTableData()
     } catch (error) {
       ElMessage.error(error.message || '删除失败')
+    }
+  }).catch(() => {})
+}
+
+// 防御性修正：以数据库实际入库数据为准，回填卡在“处理中”的解析状态
+const handleRepairStatus = (row) => {
+  ElMessageBox.confirm(
+    `将按数据库实际入库数据核对并修正「${row.fileName}」的解析状态，确定继续？`,
+    '修正状态',
+    { confirmButtonText: '确定修正', cancelButtonText: '取消', type: 'warning' }
+  ).then(async () => {
+    try {
+      const msg = await repairFileStatus(row.id)
+      ElMessage.success(msg || '状态已修正')
+      getTableData()
+    } catch (error) {
+      // 失败信息已由响应拦截器统一提示
     }
   }).catch(() => {})
 }
@@ -985,9 +1011,13 @@ const handlePreview = async (row) => {
 onMounted(() => {
   getTableData()
   fetchMappingOptions()
+  window.addEventListener('app:refresh', onAppRefresh)
 })
 
+const onAppRefresh = () =>getTableData()
+
 onUnmounted(() => {
+  window.removeEventListener('app:refresh', onAppRefresh)
   if (pollingTimer) {
     clearInterval(pollingTimer)
     pollingTimer = null

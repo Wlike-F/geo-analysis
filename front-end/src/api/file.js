@@ -97,10 +97,26 @@ export function deleteFile(id) {
   })
 }
 
+export function repairFileStatus(id) {
+  return request({
+    url: `/file/${id}/repair-status`,
+    method: 'post'
+  })
+}
+
 export function clearFiles() {
   return request({
     url: '/file/clear',
     method: 'delete'
+  })
+}
+
+// ==================== 上传目录（存储设置） ====================
+
+export function getUploadDirsStatus() {
+  return request({
+    url: '/file/upload-dirs',
+    method: 'get'
   })
 }
 

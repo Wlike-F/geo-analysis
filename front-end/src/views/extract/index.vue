@@ -117,26 +117,6 @@
     <!-- ⑤ 右侧筛选抽屉 -->
     <el-drawer v-model="filterDrawerVisible" title="条件筛选" direction="rtl" size="720px" :close-on-click-modal="true">
       <div class="drawer-body">
-        <!-- 文本列配置 -->
-        <div class="drawer-section">
-          <div class="drawer-section-title" @click="drawerTextConfigVisible = !drawerTextConfigVisible">
-            <el-icon><Setting /></el-icon>
-            文本列配置
-            <el-tag v-if="currentTab?.textColumns?.length" size="small" type="success" effect="plain">
-              {{ currentTab?.textColumns?.length }} 个
-            </el-tag>
-            <el-icon class="expand-icon" :class="{ expanded: drawerTextConfigVisible }"><ArrowDown /></el-icon>
-          </div>
-          <div v-show="drawerTextConfigVisible" class="drawer-section-body">
-            <p class="text-config-tip">选择包含分类文本的列（如岩性、井号），最多 10 个。其余列默认数值筛选。</p>
-            <el-select v-model="currentTab.textColumns" multiple filterable collapse-tags collapse-tags-tooltip placeholder="选择文本列…" style="width: 100%;">
-              <el-option v-for="col in currentTab?.columns || []" :key="col" :label="col" :value="col" />
-            </el-select>
-            <el-button type="primary" size="small" style="margin-top: 8px;" :loading="textColumnSaving" @click="handleTextColumnConfigSave(currentTab)">
-              {{ textColumnSaving ? '正在回填数据...' : '保存并回填' }}
-            </el-button>
-          </div>
-        </div>
 
         <!-- 筛选条件 -->
         <div class="drawer-section">
@@ -255,7 +235,7 @@
       <template #footer>
         <div class="drawer-footer">
           <el-button @click="filterDrawerVisible = false">取消</el-button>
-          <el-button type="info" plain @click="clearCurrentTabFilters">清除条件</el-button>
+          <el-button type="info" plain @click="clearAllFilters">清除条件</el-button>
           <el-button type="warning" plain @click="openPresetPicker">加载预设</el-button>
           <el-button type="success" plain @click="saveCurrentAsPreset">保存为预设</el-button>
           <el-button type="primary" icon="Filter" @click="applyDrawerFilters">应用筛选</el-button>
@@ -291,7 +271,7 @@
         <el-table-column prop="name" label="预设名称" min-width="140" />
         <el-table-column prop="scope" label="范围" width="90" align="center">
           <template #default="{ row }">
-            <el-tag size="small" :type="row.scope === 'all' ? '' : 'warning'">{{ row.scope === 'all' ? '全局' : '当前' }}</el-tag>
+            <el-tag size="small" :type="row.scope === 'all' ? 'primary' : 'warning'">{{ row.scope === 'all' ? '全局' : '当前' }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="80" align="center">
@@ -360,7 +340,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowDown, Download, Setting, Filter, Document, Files, Close } from '@element-plus/icons-vue'
-import { exportBatchZipStream, exportFilteredExcel, getFileList, getFilePage, getPageData, getFileLayers, getTextColumns, saveTextColumns, getDistinctValues } from '@/api/file'
+import { exportBatchZipStream, exportFilteredExcel, getFileList, getFilePage, getPageData, getFileLayers, getTextColumns, getDistinctValues } from '@/api/file'
 import { getDefaultColumns, listPresets, savePreset } from '@/api/filterPreset'
 
 const activeTabName = ref('')
@@ -403,9 +383,7 @@ const analysisLoading = ref(false)
 
 // ==================== 状态栏 + 抽屉相关 ====================
 const filterDrawerVisible = ref(false)
-const drawerTextConfigVisible = ref(false)
 const filterScope = ref('current')
-const textColumnSaving = ref(false)
 const globalFilterColumns = ref([])
 const globalTextFilterValues = ref({})
 
@@ -437,12 +415,12 @@ const conditionsPanelVisible = ref(false) // 状态栏条件面板展开状态
 const globalTextColumns = computed(() => {
   const textCols = new Set()
   tabs.value.forEach(tab => {
-    (tab.textColumns || []).forEach(col => textCols.add(col))
+    (tab.textColumns || []).forEach(col => textCols.add(col.toLowerCase()))
   })
   return textCols
 })
 
-const isGlobalTextColumn = (col) => globalTextColumns.value.has(col)
+const isGlobalTextColumn = (col) => globalTextColumns.value.has(col.toLowerCase())
 
 // 全局文本列的去重选项缓存（跨文件聚合）
 const globalTextColumnOptions = ref({})
@@ -619,8 +597,8 @@ const clearAllFilters = () => {
     }
     tab.hasFiltered = false
     tab.currentPage = 1
+    fetchPageData(tab)
   })
-  fetchPageData(tabs.value.find(t => t.name === activeTabName.value) || tabs.value[0])
   ElMessage.success('已清除所有筛选条件')
 }
 
@@ -649,9 +627,11 @@ const applyDrawerFilters = () => {
         if (!tab.textFilterValues[col]) tab.textFilterValues[col] = []
       })
       Object.entries(mergedFilters).forEach(([col, range]) => {
+        if (!tab.columns.includes(col)) return
         tab.filters[col] = { min: range.min || '', max: range.max || '' }
       })
       Object.entries(mergedTextFilters).forEach(([col, vals]) => {
+        if (!tab.columns.includes(col)) return
         tab.textFilterValues[col] = vals || []
       })
       tab.currentPage = 1
@@ -722,12 +702,23 @@ const saveCurrentAsPreset = () => {
     }
     presetSaving.value = true
     try {
+      const rawFilters = filterScope.value === 'all' ? globalFilters.value : (tab.filters || {})
+      const rawTextFilters = filterScope.value === 'all' ? globalTextFilterValues.value : (tab.textFilterValues || {})
+      // 只保留有效条件（有 min/max 或有选中值）
+      const cleanFilters = {}
+      Object.entries(rawFilters).forEach(([col, r]) => {
+        if ((r.min !== '' && r.min != null) || (r.max !== '' && r.max != null)) cleanFilters[col] = r
+      })
+      const cleanTextFilters = {}
+      Object.entries(rawTextFilters).forEach(([col, vs]) => {
+        if (Array.isArray(vs) && vs.length > 0) cleanTextFilters[col] = vs
+      })
       const payload = {
         name,
         scope: filterScope.value,
         columnsJson: JSON.stringify(filterScope.value === 'all' ? globalFilterColumns.value : (tab.columns || [])),
-        filtersJson: JSON.stringify(filterScope.value === 'all' ? globalFilters.value : (tab.filters || {})),
-        textFiltersJson: JSON.stringify(filterScope.value === 'all' ? globalTextFilterValues.value : (tab.textFilterValues || {}))
+        filtersJson: JSON.stringify(cleanFilters),
+        textFiltersJson: JSON.stringify(cleanTextFilters)
       }
       await savePreset(payload)
       ElMessage.success('预设保存成功')
@@ -743,33 +734,62 @@ const saveCurrentAsPreset = () => {
 
 const applyPresetToCurrentTab = (row) => {
   const tab = currentTab.value
-  if (!tab || !row) return
-  const columns = parseJson(row.columnsJson, [])
-  const filters = parseJson(row.filtersJson, {})
-  const textFilters = parseJson(row.textFiltersJson, {})
-
-  if (row.scope === 'all') {
-    // 先设置数据，再切换 scope，避免 watcher 异步回填空值覆盖预设数据
-    globalFilterColumns.value = columns
-    globalFilters.value = filters
-    globalTextFilterValues.value = textFilters
-    filterScope.value = 'all'
-  } else {
-    // 当前文件：merge 而非替换，保留所有列结构
-    ;(tab.columns || []).forEach(col => {
-      if (!tab.filters[col]) tab.filters[col] = { min: '', max: '' }
-      if (!tab.textFilterValues[col]) tab.textFilterValues[col] = []
-    })
-    Object.entries(filters).forEach(([col, range]) => {
-      tab.filters[col] = { min: range.min || '', max: range.max || '' }
-    })
-    Object.entries(textFilters).forEach(([col, vals]) => {
-      tab.textFilterValues[col] = vals || []
-    })
-    filterScope.value = 'current'
+  if (!tab || !row) {
+    ElMessage.warning('请先选择一个文件页签后再加载预设')
+    return
   }
-  presetPickerVisible.value = false
-  ElMessage.success('预设已加载，可直接点击应用筛选')
+  try {
+    const columns = parseJson(row.columnsJson, [])
+    const rawFilters = parseJson(row.filtersJson, {})
+    const rawTextFilters = parseJson(row.textFiltersJson, {})
+    // 加载时过滤空条件，兼容旧预设（r 为 null/空对象时安全跳过）
+    const filters = {}
+    Object.entries(rawFilters).forEach(([col, r]) => {
+      if (r && ((r.min !== '' && r.min != null) || (r.max !== '' && r.max != null))) filters[col] = r
+    })
+    const textFilters = {}
+    Object.entries(rawTextFilters).forEach(([col, vs]) => {
+      if (Array.isArray(vs) && vs.length > 0) textFilters[col] = vs
+    })
+
+    if (row.scope === 'all') {
+      // 为每一列补齐骨架：预设里范围为空/缺失的列也要有 {min,max}/[]，
+      // 否则抽屉渲染 globalFilters[col].min 会读到 undefined 而崩溃
+      const fullFilters = {}
+      const fullText = {}
+      columns.forEach(col => {
+        fullFilters[col] = filters[col] || { min: '', max: '' }
+        fullText[col] = textFilters[col] || []
+      })
+      // 先设置数据，再切换 scope，避免 watcher 异步回填空值覆盖预设数据
+      globalFilterColumns.value = columns
+      globalFilters.value = fullFilters
+      globalTextFilterValues.value = fullText
+      filterScope.value = 'all'
+    } else {
+      // 当前文件：merge 而非替换，保留所有列结构
+      ;(tab.columns || []).forEach(col => {
+        if (!tab.filters[col]) tab.filters[col] = { min: '', max: '' }
+        if (!tab.textFilterValues[col]) tab.textFilterValues[col] = []
+      })
+      Object.entries(filters).forEach(([col, range]) => {
+        if (!tab.columns.includes(col)) return
+        tab.filters[col] = { min: range.min || '', max: range.max || '' }
+      })
+      Object.entries(textFilters).forEach(([col, vals]) => {
+        if (!tab.columns.includes(col)) return
+        tab.textFilterValues[col] = vals || []
+      })
+      filterScope.value = 'current'
+    }
+    ElMessage.success('预设已加载，可直接点击应用筛选')
+  } catch (e) {
+    console.error('加载预设失败', e)
+    ElMessage.error('加载预设失败：' + (e && e.message ? e.message : e))
+  } finally {
+    // 无论成功或异常，都关闭选择弹窗，避免卡死无法关闭
+    presetPickerVisible.value = false
+  }
 }
 
 const loadPresetFromRow = (row) => {
@@ -862,7 +882,13 @@ const loadFileList = async () => {
 
 onMounted(() => {
   loadFileList()
+  window.addEventListener('app:refresh', onAppRefresh)
 })
+
+const onAppRefresh = () => {
+  const tab = currentTab.value
+  if (tab) fetchPageData(tab)
+}
 
 const updateGlobalFilters = () => {
   const keys = new Set()
@@ -888,7 +914,7 @@ const buildFiltersParam = (tabObj) => {
   if (tabObj.filters) {
     for (const [col, range] of Object.entries(tabObj.filters)) {
       // 文本列：传 values
-      if (tabObj.textColumns && tabObj.textColumns.includes(col)) {
+      if (tabObj.textColumns && tabObj.textColumns.some(tc => tc.toLowerCase() === col.toLowerCase())) {
         const values = tabObj.textFilterValues?.[col]
         if (values && values.length > 0) {
           params[col] = { values }
@@ -1390,39 +1416,8 @@ const loadTextColumnOptions = async (tabObj, colName) => {
   }
 }
 
-const handleTextColumnConfigSave = async (tabObj) => {
-  if (!tabObj) return
-  if (!tabObj.textColumns || tabObj.textColumns.length === 0) {
-    ElMessage.warning('请至少选择一个文本列')
-    return
-  }
-  if (tabObj.textColumns.length > 10) {
-    ElMessage.warning('文本列最多支持 10 个')
-    return
-  }
-  textColumnSaving.value = true
-  try {
-    const mapping = {}
-    tabObj.textColumns.forEach((col, idx) => { mapping[col] = `text_col_${idx + 1}` })
-    const res = await saveTextColumns(tabObj.fileId, mapping)
-    tabObj.textColumns.forEach(col => {
-      if (!tabObj.textFilterValues[col]) tabObj.textFilterValues[col] = []
-    })
-    for (const col of tabObj.textColumns) {
-      await loadTextColumnOptions(tabObj, col)
-    }
-    ElMessage.success(res || '文本列配置已保存，数据回填完成')
-    // 清除全局文本列选项缓存，因为配置变更了
-    globalTextColumnOptions.value = {}
-  } catch (error) {
-    ElMessage.error(error.message || '文本列配置保存失败')
-  } finally {
-    textColumnSaving.value = false
-  }
-}
-
 const isTextColumn = (tabObj, colName) => {
-  return tabObj.textColumns && tabObj.textColumns.includes(colName)
+  return tabObj.textColumns && tabObj.textColumns.some(tc => tc.toLowerCase() === colName.toLowerCase())
 }
 </script>
 
