@@ -30,4 +30,22 @@ public class ThreadPoolConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * 缓存清理专用单线程执行器：把大批量 DELETE 从 HTTP 请求线程移到后台，
+     * 避免删除大文件（百万行明细）时同步阻塞导致网关 502/超时；单线程天然串行化清理任务。
+     */
+    @Bean("cleanupExecutor")
+    public Executor cleanupExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(1);
+        executor.setQueueCapacity(2);
+        executor.setThreadNamePrefix("cleanup-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.CallerRunsPolicy());
+        executor.setWaitForTasksToCompleteOnShutdown(true);
+        executor.setAwaitTerminationSeconds(120);
+        executor.initialize();
+        return executor;
+    }
 }
