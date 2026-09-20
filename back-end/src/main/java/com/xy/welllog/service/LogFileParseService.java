@@ -1,6 +1,7 @@
 package com.xy.welllog.service;
 
 import cn.hutool.json.JSONUtil;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.xy.welllog.dto.PreviewResultDTO;
 import com.xy.welllog.entity.LogFileInfo;
 import com.xy.welllog.entity.SysColumnMapping;
@@ -382,21 +383,22 @@ public class LogFileParseService {
 
             fileInfo.setTotalRows(totalRows[0]);
             fileInfo.setColumnsJson(JSONUtil.toJsonStr(columns));
-            final Long statsFileId = fileId;
-            // 预计算核心列统计（异步，不阻塞解析完成）
-            CompletableFuture.runAsync(() -> {
-                String stats = computeColumnStats(statsFileId);
-                if (stats != null) {
-                    LogFileInfo fi = fileInfoService.getById(statsFileId);
-                    if (fi != null) {
-                        fi.setColumnStatsJson(stats);
-                        fileInfoService.updateById(fi);
-                    }
-                }
-            });
             fileInfo.setStatus(1); // 成功
             fileInfoService.updateById(fileInfo);
             log.info("[解析] 解析完成: {}, fileId={}, 共 {} 行有效数据", title, fileId, totalRows[0]);
+
+            // 预计算核心列统计（异步）。注意：这里只回写 column_stats_json 单列，
+            // 绝不能用 getById+updateById 整行覆盖，否则会与上面的 status=1 形成竞态，
+            // 把 status/totalRows 冲回旧值(0)，导致界面一直“处理中”。
+            final Long statsFileId = fileId;
+            CompletableFuture.runAsync(() -> {
+                String stats = computeColumnStats(statsFileId);
+                if (stats != null) {
+                    fileInfoService.update(new LambdaUpdateWrapper<LogFileInfo>()
+                            .eq(LogFileInfo::getId, statsFileId)
+                            .set(LogFileInfo::getColumnStatsJson, stats));
+                }
+            });
 
         } catch (Exception e) {
             log.error("[解析] 解析异常: fileId={}, 已处理 {} 行", fileId, totalRows[0], e);
@@ -509,7 +511,7 @@ public class LogFileParseService {
     /**
      * 解析完成后预计算核心列统计（MIN/MAX/有效数/无效数），存 JSON 供解析报告秒开
      */
-    private String computeColumnStats(Long fileId) {
+    public String computeColumnStats(Long fileId) {
         try {
             String sentinel = "(col IS NOT NULL AND col != -9999 AND col != -999.25 AND col != -999)";
             String[] cols = {"depth", "ac", "den", "gr", "sp", "rt"};

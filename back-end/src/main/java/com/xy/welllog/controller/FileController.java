@@ -15,7 +15,6 @@ import com.xy.welllog.entity.SysUser;
 import com.xy.welllog.entity.WellLayer;
 import com.xy.welllog.service.*;
 import com.xy.welllog.utils.JwtUtils;
-import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -66,33 +65,105 @@ public class FileController {
     private final WellLayerService wellLayerService;
     private final JdbcTemplate jdbcTemplate;
 
-    @Value("${app.upload.dirs}")
-    private List<String> uploadDirs;
+    /** application.yml 中的默认上传目录（用户未在系统设置里配置时的兜底） */
+    @Value("${app.upload.dirs:}")
+    private String defaultUploadDirs;
 
-    /** 启动时解析出第一个可用的上传目录 */
-    private String resolvedUploadDir;
-
-    @PostConstruct
-    public void initUploadDir() {
-        for (String dir : uploadDirs) {
-            if (FileUtil.exist(dir) || FileUtil.mkdir(dir) != null) {
-                resolvedUploadDir = dir;
-                log.info("上传目录已就绪: {}", dir);
-                return;
+    /**
+     * 获取当前用户可用的上传目录：优先用户系统设置(sysSettings.uploadDirs)，
+     * 其次 application.yml 默认；按顺序返回第一个真正可写的目录，均不可用返回 null。
+     */
+    private String getUploadDir(HttpServletRequest request) {
+        for (String dir : resolveUploadDirs(request)) {
+            if (isDirWritable(dir)) {
+                return dir;
             }
-            log.warn("上传目录不可用，尝试下一个: {}", dir);
         }
-        log.error("所有配置的上传目录均不可用: {}", uploadDirs);
+        return null;
     }
 
-    /** 获取可用上传目录，运行时动态检查（防止运行中目录失效） */
-    private String getUploadDir() {
-        if (resolvedUploadDir != null && FileUtil.exist(resolvedUploadDir)) {
-            return resolvedUploadDir;
+    /** 解析候选上传目录列表：用户设置优先，回退 yml 默认 */
+    private List<String> resolveUploadDirs(HttpServletRequest request) {
+        List<String> configured = readUserUploadDirs(getUserId(request));
+        if (!configured.isEmpty()) return configured;
+        return parseDefaultDirs();
+    }
+
+    /** 读取用户配置的上传目录（sysSettings.uploadDirs），未配置返回空列表 */
+    private List<String> readUserUploadDirs(Long userId) {
+        if (userId == null) return Collections.emptyList();
+        SysUser user = sysUserService.getById(userId);
+        if (user != null && StringUtils.hasText(user.getSysSettings())) {
+            try {
+                cn.hutool.json.JSONObject obj = JSONUtil.parseObj(user.getSysSettings());
+                cn.hutool.json.JSONArray arr = obj.getJSONArray("uploadDirs");
+                if (arr != null && !arr.isEmpty()) {
+                    return arr.toList(String.class);
+                }
+            } catch (Exception e) {
+                log.warn("解析用户上传目录配置失败: {}", e.getMessage());
+            }
         }
-        // 运行时主目录失效，重新扫描
-        initUploadDir();
-        return resolvedUploadDir;
+        return Collections.emptyList();
+    }
+
+    /** 解析 application.yml 默认上传目录 */
+    private List<String> parseDefaultDirs() {
+        if (!StringUtils.hasText(defaultUploadDirs)) return Collections.emptyList();
+        return Arrays.stream(defaultUploadDirs.split(","))
+                .map(String::trim).filter(StringUtils::hasText).toList();
+    }
+
+    /** 真实探测目录是否可用：能创建 + 能写 + 能删（修复原先 mkdir!=null 恒真的失效判断） */
+    private boolean isDirWritable(String dir) {
+        if (!StringUtils.hasText(dir)) return false;
+        try {
+            File f = FileUtil.file(dir);
+            if (!f.exists() && !f.mkdirs()) return false;
+            if (!f.isDirectory()) return false;
+            File probe = new File(f, ".writetest_" + System.nanoTime());
+            try {
+                FileUtil.writeBytes(new byte[]{0}, probe);
+                return true;
+            } finally {
+                FileUtil.del(probe);
+            }
+        } catch (Exception e) {
+            log.warn("上传目录不可用: {} ({})", dir, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 上传目录状态（只读）：返回我的配置、系统默认、当前生效目录，以及每个目录的可写状态。
+     * 供“存储设置”面板透明化展示使用。
+     */
+    @GetMapping("/upload-dirs")
+    public Result<Map<String, Object>> getUploadDirsStatus(HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return Result.failed("请先登录");
+
+        List<String> configured = readUserUploadDirs(userId);
+        List<String> defaults = parseDefaultDirs();
+        // 生效候选：有我的配置用我的，否则用默认
+        List<String> candidates = configured.isEmpty() ? defaults : configured;
+        String active = null;
+        for (String dir : candidates) {
+            if (isDirWritable(dir)) { active = dir; break; }
+        }
+
+        // 汇总展示目录的可写状态（去重，我的在前、默认在后）
+        Map<String, Boolean> writable = new LinkedHashMap<>();
+        for (String dir : configured) writable.put(dir, isDirWritable(dir));
+        for (String dir : defaults) if (!writable.containsKey(dir)) writable.put(dir, isDirWritable(dir));
+
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("configured", configured);
+        res.put("defaults", defaults);
+        res.put("active", active);
+        res.put("usingDefault", configured.isEmpty());
+        res.put("writable", writable);
+        return Result.success(res);
     }
 
     private Long getUserId(HttpServletRequest request) {
@@ -116,7 +187,7 @@ public class FileController {
         if (file.isEmpty()) return Result.failed("文件内容为空");
         if (getUserId(request) == null) return Result.failed("请先登录");
         try {
-            String uploadDir = getUploadDir();
+            String uploadDir = getUploadDir(request);
             if (uploadDir == null) {
                 return Result.failed("文件上传目录不可用，请检查配置");
             }
@@ -184,13 +255,12 @@ public class FileController {
      * 读取服务器某个绝对路径下所有的 TXT 测井文件并批量入库（自动应用建议映射）
      */
     @PostMapping("/scan")
-    public Result<String> scanServerPath(@RequestParam("path") String path, HttpServletRequest request) {
+    public Result<Map<String, Object>> scanServerPath(@RequestParam("path") String path, HttpServletRequest request) {
         Long userId = getUserId(request);
         if (userId == null) return Result.failed("请先登录");
-        // 路径白名单校验
-        String uploadDir = getUploadDir();
-        if (uploadDir == null || !path.startsWith(uploadDir.replace('\\', '/'))) {
-            return Result.failed("扫描路径不在允许范围内");
+        // 允许扫描服务器上的任意绝对路径（不再限制在上传目录内）
+        if (!StringUtils.hasText(path)) {
+            return Result.failed("请输入要扫描的目录路径");
         }
         if (!FileUtil.isDirectory(path)) {
             return Result.failed("该路径不存在或不是一个目录");
@@ -205,17 +275,24 @@ public class FileController {
         int skippedCount = 0;
 
         // 并行预览所有文件（I/O + 解析密集，提速明显）
+        // 提前捕获 userId，避免在异步线程里访问将被回收的 HttpServletRequest
+        final Long scanUserId = userId;
         List<CompletableFuture<Boolean>> futures = new ArrayList<>();
         for (File txtFile : txtFiles) {
             futures.add(CompletableFuture.supplyAsync(() -> {
                 try {
+                    // 去重只针对"当前用户 + 未删除(status!=2)"的同名记录：
+                    // 1) 已软删除的历史记录不应阻止重新扫描导入（修复"清空后再扫描识别不到"）；
+                    // 2) 必须按 userId 隔离，避免他人导入过同名文件导致本用户被静默跳过。
                     long exists = fileInfoService.count(new LambdaQueryWrapper<LogFileInfo>()
-                            .eq(LogFileInfo::getFileName, txtFile.getName()));
-                    if (exists > 0) return false; // skip
+                            .eq(LogFileInfo::getUserId, scanUserId)
+                            .eq(LogFileInfo::getFileName, txtFile.getName())
+                            .ne(LogFileInfo::getStatus, 2));
+                    if (exists > 0) return false; // 已有未删除的同名记录，跳过
 
                     PreviewResultDTO preview = logFileParseService.previewTxtStreamSync(txtFile, txtFile.getName());
                     LogFileInfo fileInfo = new LogFileInfo();
-                    fileInfo.setUserId(getUserId(request));
+                    fileInfo.setUserId(scanUserId);
                     fileInfo.setFileName(txtFile.getName());
                     fileInfo.setStatus(0);
                     fileInfo.setCreateTime(new Date());
@@ -241,8 +318,17 @@ public class FileController {
             }
         }
         
-        operationLogService.recordLog("文件扫描", "批量扫描目录 [" + path + "] 提交 " + submittedCount + " 个任务", submittedCount, 0L, getUserId(request));
-        return Result.success("扫描完毕，已在后台极速处理");
+        int foundCount = txtFiles.size();
+        log.info("目录扫描完成 [{}]：共发现 {} 个文件，新导入 {} 个，跳过 {} 个（跳过=已存在同名记录/解析失败/超时）",
+                path, foundCount, submittedCount, skippedCount);
+        operationLogService.recordLog("文件扫描",
+                "批量扫描目录 [" + path + "] 共发现 " + foundCount + " 个，导入 " + submittedCount + " 个，跳过 " + skippedCount + " 个",
+                submittedCount, 0L, userId);
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("found", foundCount);
+        summary.put("imported", submittedCount);
+        summary.put("skipped", skippedCount);
+        return Result.success(summary, "扫描完毕");
     }
 
     @PostMapping("/export")
@@ -487,7 +573,7 @@ public class FileController {
     private Result<Map<String, Object>> buildReportFromCache(LogFileInfo fileInfo, List<String> columns) {
         Map<String, Object> statsMap = JSONUtil.toBean(fileInfo.getColumnStatsJson(), Map.class);
         Map<String, ColumnReport> columnReports = new LinkedHashMap<>();
-        double depthMin = Double.NaN, depthMax = Double.NaN;
+        Double depthMin = null, depthMax = null;
         long totalInvalid = 0;
 
         for (String col : columns) {
@@ -668,6 +754,41 @@ public class FileController {
         fileInfoService.updateById(fileInfo);
         operationLogService.recordLog("文件管理", "删除文件 [" + fileInfo.getFileName() + "]", 1, null, userId);
         return Result.success("删除成功");
+    }
+
+    /**
+     * 防御性修正：以数据库实际入库数据为准，回填解析状态/行数/列统计。
+     * 用于处理"后台日志已解析完成，但因异常或竞态导致状态卡在'处理中'"的记录。
+     * 幂等：已正常的文件直接返回；确实无数据的文件拒绝伪造成功状态。
+     */
+    @PostMapping("/{id}/repair-status")
+    public Result<String> repairFileStatus(@PathVariable Long id, HttpServletRequest request) {
+        Long userId = getUserId(request);
+        if (userId == null) return Result.failed("请先登录");
+        LogFileInfo fileInfo = fileInfoService.getById(id);
+        if (fileInfo == null || !fileInfo.getUserId().equals(userId)) {
+            return Result.failed("文件不存在或无权操作");
+        }
+        if (fileInfo.getStatus() != null && fileInfo.getStatus() == 1) {
+            return Result.success("文件状态正常，无需修正");
+        }
+        // 以实际入库行数为准，避免凭空置为成功
+        Long recordCount = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM log_data_records WHERE file_id = ?", Long.class, id);
+        if (recordCount == null || recordCount == 0) {
+            return Result.failed("未检测到已解析的数据记录，无法修正，请重新上传解析");
+        }
+        fileInfo.setStatus(1);
+        fileInfo.setTotalRows(recordCount.intValue());
+        // 重算核心列统计缓存；失败则保留原值，解析报告可实时兜底计算
+        String stats = logFileParseService.computeColumnStats(id);
+        if (stats != null) {
+            fileInfo.setColumnStatsJson(stats);
+        }
+        fileInfoService.updateById(fileInfo);
+        operationLogService.recordLog("文件管理",
+                "修正解析状态 [" + fileInfo.getFileName() + "] 实际行数=" + recordCount, 1, null, userId);
+        return Result.success("已按实际数据修正状态：共 " + recordCount + " 行");
     }
 
     // ==================== 地质分层配置 ====================
